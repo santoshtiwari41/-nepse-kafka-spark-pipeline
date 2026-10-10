@@ -187,9 +187,9 @@ project-demo/
 ## 8. Implementation Phases
 
 ### Phase 0 — Environment (Day 1–2)
-- [ ] Docker Compose: Kafka (KRaft), Kafka-UI, HDFS NameNode + DataNode, Spark master + worker
-- [ ] Verify: create topic, write a test file to HDFS, run a test Spark job
-- [ ] `start.sh` / `stop.sh`
+- [x] Docker Compose: Kafka (KRaft), Kafka-UI, HDFS NameNode + DataNode, Spark master + worker
+- [x] Verify: create topic, write a test file to HDFS, run a test Spark job (`scripts/verify.sh`)
+- [x] `start.sh` / `stop.sh` (+ `init.sh`, `verify.sh`)
 
 ### Phase 1 — Data Collection (Day 2–4)
 - [ ] `fetch_history.py`: download historical OHLCV for all or selected symbols (plus NEPSE index and company list)

@@ -1,0 +1,150 @@
+# NEPSE Big Data Platform — Phase 0 infrastructure
+#   Kafka (KRaft) + Kafka UI      → ingestion
+#   HDFS (NameNode + DataNode)    → storage (data lake)
+#   Spark (master + worker)       → stream & batch processing
+#
+# Host ports
+#   9094  Kafka (for producers running on the host)
+#   8085  Kafka UI
+#   9870  HDFS NameNode UI        9864  DataNode UI / WebHDFS data
+#   8080  Spark Master UI         8081  Spark Worker UI      4040  Spark job UI
+
+name: nepse
+
+x-hadoop-common: &hadoop-common
+  image: apache/hadoop:3.3.6
+  env_file: ./config/hadoop.env
+  restart: unless-stopped
+  networks: [nepse-net]
+
+x-spark-common: &spark-common
+  build: ./spark
+  image: nepse-spark:3.5.3
+  restart: unless-stopped
+  networks: [nepse-net]
+  volumes:
+    - ./spark/jobs:/opt/spark-apps
+    - ./data:/opt/data
+    - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+    - ./spark/conf/log4j2.properties:/opt/spark/conf/log4j2.properties:ro
+
+services:
+  # ───────────────────────── Ingestion ─────────────────────────
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: kafka
+    hostname: kafka
+    restart: unless-stopped
+    networks: [nepse-net]
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL → other containers (kafka:9092), EXTERNAL → host (localhost:9094)
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 168          # keep 7 days → replayable
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    restart: unless-stopped
+    networks: [nepse-net]
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: nepse
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ───────────────────────── Storage ─────────────────────────
+  namenode:
+    <<: *hadoop-common
+    container_name: namenode
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    ports:
+      - "9870:9870"
+    environment:
+      ENSURE_NAMENODE_DIR: /data/namenode/current
+    volumes:
+      - hdfs-namenode:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9870/ > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  datanode:
+    <<: *hadoop-common
+    container_name: datanode
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    ports:
+      - "9864:9864"
+    volumes:
+      - hdfs-datanode:/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+
+  # ───────────────────────── Processing ─────────────────────────
+  spark-master:
+    <<: *spark-common
+    container_name: spark-master
+    hostname: spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    ports:
+      - "8080:8080"
+      - "4040:4040"
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      SPARK_DAEMON_MEMORY: 512m
+
+  spark-worker:
+    <<: *spark-common
+    container_name: spark-worker
+    hostname: spark-worker
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    ports:
+      - "8081:8081"
+    environment:
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-4}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_DAEMON_MEMORY: 512m
+    depends_on:
+      - spark-master
+
+networks:
+  nepse-net:
+    name: nepse-net
+
+volumes:
+  kafka-data:
+  hdfs-namenode:
+  hdfs-datanode:
