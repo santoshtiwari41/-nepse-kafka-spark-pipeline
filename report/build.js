@@ -419,25 +419,17 @@ const refs = [
 ];
 
 const appendix = [
-  H1("Appendix A: How to Run"),
-  P("Everything runs in Docker, including the Python data-collection and producer scripts (their image installs the dependencies with uv), so no local Python or virtual environment is needed. First-time setup (needs internet once):"),
-  ...code([
-    "./scripts/start.sh                    # build/pull images, start Kafka, HDFS, Spark, dashboard",
-    "./scripts/verify.sh                   # health check + Spark <-> Kafka <-> HDFS smoke test",
-    "./scripts/ingest.sh fetch_companies   # company list (runs in the ingestion container)",
-    "./scripts/ingest.sh fetch_history     # full price history",
-    "./scripts/run_batch.sh                # bronze -> silver -> gold -> MLlib -> Spark SQL",
-  ]),
-  P("Demo day (works offline):"),
-  ...code([
-    "./scripts/demo.sh               # guided demo, LIVE if the market is open, else REPLAY",
-    "./scripts/demo.sh --replay --speed 10",
-    "",
-    "# manual equivalent",
-    "./scripts/start.sh",
-    "./scripts/stream.sh start",
-    "./scripts/ingest.sh replay_producer --loop     # or live_producer",
-  ]),
+  H1("Appendix A: Installation and Execution"),
+  P("All components of the system run as Docker containers managed with Docker Compose, including the Python data-collection and producer scripts, so no local Python installation is required. Table 16 lists the commands used to set up and operate the system, in order."),
+  table(["Step", "Command", "Purpose"], [
+    ["1. Start services", "`./scripts/start.sh`", "Starts Kafka, HDFS, Spark and the dashboard; creates the Kafka topics and HDFS directories"],
+    ["2. Verify", "`./scripts/verify.sh`", "Checks every service and runs an end-to-end Spark–Kafka–HDFS test"],
+    ["3. Collect data", "`./scripts/ingest.sh fetch_history`", "Downloads daily price history and the NEPSE index (the company list is included in the repository)"],
+    ["4. Batch processing", "`./scripts/run_batch.sh`", "Builds the bronze, silver and gold layers and trains the MLlib model"],
+    ["5. Stream processing", "`./scripts/stream.sh start`", "Starts the Spark Structured Streaming job"],
+    ["6. Data ingestion", "`./scripts/ingest.sh live_producer`", "Publishes live ticks to Kafka; `replay_producer` replays a past trading day instead"],
+  ], [20, 34, 46]),
+  caption("Table", "Setup and execution commands"),
   table(["Service", "Address"], [
     ["Dashboard", "http://localhost:8501"],
     ["Kafka UI", "http://localhost:8085"],
@@ -469,7 +461,7 @@ const appendix = [
     ["HDFS data-lake layout (bronze/silver/gold)", "MLlib model"],
     ["Report: problem, sources and features (part a)", "Report: storage, components and block diagram (part b)"],
   ], [50, 50]),
-  caption("Table", "Division of work (adjust to match the actual split)"),
+  caption("Table", "Division of work"),
 ];
 
 // ───────────── document order ─────────────
