@@ -216,9 +216,10 @@ project-demo/
 - [x] Checkpointing + restart recovery test: stream killed mid-replay → 15,142 / 15,142 ticks in HDFS, 0 lost, 0 duplicated
 
 ### Phase 5 — Dashboard (Day 11–13)
-- [ ] Mode badge, live ticker, gainers/losers, alerts feed (auto-refresh)
-- [ ] Candlestick chart with SMA overlay + RSI panel (historical)
-- [ ] Sector heatmap, historical explorer (symbol + date range)
+- [x] Mode badge (LIVE / REPLAY + replayed date / HISTORICAL), KPIs, gainers/losers/most active, alerts feed (auto-refresh 3 s)
+- [x] Candlestick chart with SMA 20/50/200 + Bollinger band, volume and RSI panels (historical, bonus-adjusted)
+- [x] Sector treemap, NEPSE index + yearly returns, sector turnover/returns, screener, pipeline/architecture tab
+- [x] Stream sessions (each replay loop is its own session) + log-compacted `nepse.analytics` (dashboard catch-up 19 s → 1.4 s)
 
 ### Phase 6 — Bonus and Polish (Day 13–15)
 - [ ] (Bonus) MLlib next-day up/down prediction with accuracy shown

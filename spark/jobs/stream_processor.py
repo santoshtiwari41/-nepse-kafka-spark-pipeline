@@ -5,7 +5,7 @@ cannot tell the difference except for the `mode` field it passes through.
 
 Streaming queries (one Spark application, each with its own checkpoint):
   ticks          raw ticks             → HDFS /nepse/bronze/ticks        (exactly-once file sink)
-  candles_1m     1-minute OHLCV + VWAP → HDFS /nepse/gold/candles_1m     (event-time windows + watermark)
+  candles_1m     1-minute OHLCV + VWAP → HDFS /nepse/gold/candles_1m     (event-time windows, 10 s watermark)
   sector_flow    turnover per sector per minute → HDFS /nepse/gold/sector_flow_1m
   live_snapshot  latest state of every symbol   → Kafka nepse.analytics (stateful, update mode)
   alerts         circuit / volume spike / big move → Kafka nepse.alerts + HDFS /nepse/gold/alerts
@@ -30,7 +30,12 @@ TICK_SCHEMA = StructType([
     *[StructField(c, DoubleType()) for c in
       ["ltp", "open", "high", "low", "prev_close", "volume", "turnover", "last_qty", "change_pct"]],
     StructField("source", StringType()), StructField("mode", StringType()),
+    StructField("session_start", StringType()), StructField("session_date", StringType()),
 ])
+
+# Producers emit ticks in time order, so little lateness is expected: a short watermark
+# lets 1-minute windows be written ~10 s after they close
+WATERMARK = "10 seconds"
 
 # Alert thresholds
 CIRCUIT_PCT = 9.5        # NEPSE circuit is ±10 %; alert when a stock is about to hit it
@@ -67,7 +72,7 @@ def enrich(spark, ticks):
 
 
 def candles(ticks):
-    return (ticks.withWatermark("event_time", "1 minute")
+    return (ticks.withWatermark("event_time", WATERMARK)
                  .groupBy(F.window("event_time", "1 minute").alias("w"), "symbol")
                  .agg(F.min_by("ltp", "event_time").alias("open"),
                       F.max("ltp").alias("high"),
@@ -84,7 +89,7 @@ def candles(ticks):
 
 def sector_flow(enriched):
     return (enriched.filter(F.col("instrument_type") == "Equity")
-                    .withWatermark("event_time", "1 minute")
+                    .withWatermark("event_time", WATERMARK)
                     .groupBy(F.window("event_time", "1 minute").alias("w"), "sector")
                     .agg(F.round(F.sum(F.col("ltp") * F.col("last_qty"))).alias("turnover"),
                          F.sum("last_qty").alias("volume"),
@@ -96,16 +101,16 @@ def sector_flow(enriched):
 
 
 def live_snapshot(enriched):
-    """Latest tick per symbol per trading day, kept in Spark state; emits only symbols that changed."""
+    """Latest tick per symbol per stream session, kept in Spark state; emits only symbols that changed."""
     cols = ["ltp", "open", "high", "low", "prev_close", "change_pct", "volume", "turnover",
-            "volume_ratio", "sector", "instrument_type", "mode", "source", "ts"]
-    latest = (enriched.groupBy("symbol", "trade_date")
+            "volume_ratio", "sector", "instrument_type", "mode", "source", "ts", "trade_date", "session_date"]
+    latest = (enriched.groupBy("symbol", "session_start")
                       .agg(F.max_by(F.struct(*cols), "event_time").alias("s"),
                            F.count("*").alias("ticks_today")))
     value = F.to_json(F.struct(
         "symbol", *[F.col(f"s.{c}").alias(c) for c in cols],
         F.round(F.col("s.turnover") / F.col("s.volume"), 2).alias("vwap"),
-        "trade_date", "ticks_today", F.date_format(F.current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX").alias("processed_at")))
+        "session_start", "ticks_today", F.date_format(F.current_timestamp(), "yyyy-MM-dd'T'HH:mm:ssXXX").alias("processed_at")))
     return latest.select(F.col("symbol").alias("key"), value.alias("value"))
 
 
@@ -135,10 +140,12 @@ def alerts(enriched):
                                      "symbol", move_pct, "open", "ltp"))
 
     return (circuit_up.unionByName(circuit_down).unionByName(spike).unionByName(big_move)
-            # one alert per symbol & type until the watermark moves on (no alert storms)
-            .dropDuplicatesWithinWatermark(["symbol", "alert_type"])
+            # one alert per symbol & type per session until the watermark moves on (no alert storms);
+            # session in the key so back-to-back replay loops each get their own alerts
+            .dropDuplicatesWithinWatermark(["symbol", "alert_type", "session_start"])
             .select("symbol", "sector", "alert_type", "severity", "message", "ltp", "change_pct",
-                    "volume", "volume_ratio", "mode", "event_time", "trade_date"))
+                    "volume", "volume_ratio", "mode", "session_start", "session_date",
+                    "event_time", "trade_date"))
 
 
 def write_alerts(batch, batch_id):
@@ -176,8 +183,8 @@ def main():
                   .partitionBy("trade_date").trigger(processingTime=trigger).start())
 
     to_files(ticks.drop("kafka_time"), "ticks", f"{LAKE}/bronze/ticks")
-    to_files(candles(ticks), "candles_1m", f"{LAKE}/gold/candles_1m")
-    to_files(sector_flow(enriched), "sector_flow", f"{LAKE}/gold/sector_flow_1m")
+    to_files(candles(ticks), "candles_1m", f"{LAKE}/gold/candles_1m", trigger="10 seconds")
+    to_files(sector_flow(enriched), "sector_flow", f"{LAKE}/gold/sector_flow_1m", trigger="10 seconds")
 
     (live_snapshot(enriched).writeStream.queryName("live_snapshot").outputMode("update")
         .format("kafka").option("kafka.bootstrap.servers", BOOTSTRAP).option("topic", "nepse.analytics")

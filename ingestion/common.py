@@ -44,6 +44,8 @@ TICK_FIELDS = [
     "change_pct",
     "source",       # nepse-api | sharesansar | recording | historical
     "mode",         # LIVE | REPLAY
+    "session_start",  # when this stream session started (ISO) — a replay loop is a new session
+    "session_date",   # the trading day being streamed (for REPLAY: the original date)
 ]
 
 

@@ -129,10 +129,12 @@ def latest_trading_day() -> str:
 
 # ───────────────────────── replay ─────────────────────────
 
-def replay(ticks: list[dict], speed: float, producer, keep_time: bool) -> int:
+def replay(ticks: list[dict], date: str, speed: float, producer, keep_time: bool) -> int:
     orig_start = datetime.fromisoformat(ticks[0]["ts"])
     wall_start = time.monotonic()
     new_start = now_npt()
+    session = {"session_date": date,
+               "session_start": (orig_start if keep_time else new_start).isoformat(timespec="seconds")}
     last_report = 0.0
 
     for i, tick in enumerate(ticks, 1):
@@ -141,7 +143,7 @@ def replay(ticks: list[dict], speed: float, producer, keep_time: bool) -> int:
         if delay > 0:
             time.sleep(delay)
 
-        tick = dict(tick, mode="REPLAY")
+        tick = dict(tick, mode="REPLAY", **session)
         if not keep_time:
             tick["ts"] = (new_start + timedelta(seconds=offset)).isoformat(timespec="seconds")
         if producer:
@@ -198,7 +200,7 @@ def main():
     producer = None if args.dry_run else kafka_producer()
     try:
         while True:
-            replay(ticks, args.speed, producer, args.keep_time)
+            replay(ticks, date, args.speed, producer, args.keep_time)
             if not args.loop:
                 break
             print("  session finished — looping")

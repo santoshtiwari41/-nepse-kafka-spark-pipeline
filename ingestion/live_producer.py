@@ -23,6 +23,7 @@ from common import (HTTP_HEADERS, NPT, RECORDINGS, TICKS_TOPIC, kafka_producer,
                     make_tick, now_npt, send_tick)
 
 SHARESANSAR_LIVE = "https://www.sharesansar.com/live-trading"
+MARKET_OPEN = "11:00:00"
 
 
 class NepseApi:
@@ -93,6 +94,9 @@ def run(args):
 
         # Publish only symbols whose price or volume changed since the last poll
         changed = [t for t in ticks if last_seen.get(t["symbol"]) != (t["ltp"], t["volume"])]
+        for t in changed:  # a trading day is one session, starting at market open
+            t["session_date"] = t["ts"][:10]
+            t["session_start"] = f"{t['session_date']}T{MARKET_OPEN}+05:45"
         for t in changed:
             last_seen[t["symbol"]] = (t["ltp"], t["volume"])
             if producer:

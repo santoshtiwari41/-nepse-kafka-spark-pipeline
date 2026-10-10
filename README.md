@@ -24,6 +24,7 @@ Kafka + Spark + HDFS pipeline for Nepal Stock Exchange data. See [plan.md](plan.
 | Spark Master | http://localhost:8080 | Cluster and running applications |
 | Spark Worker | http://localhost:8081 | Executor details |
 | Spark job UI | http://localhost:4040 | Visible while a job is running |
+| **Dashboard** | http://localhost:8501 | Streamlit app (live + historical analytics) |
 | Kafka (host) | `localhost:9094` | Bootstrap server for producers on the host |
 | Kafka (containers) | `kafka:9092` | Bootstrap server inside Docker network |
 
@@ -156,6 +157,30 @@ Notes
   stream and a batch job can run at the same time.
 - Fault tolerance: stopping the stream mid-session and starting it again loses and duplicates
   nothing (checkpointed Kafka offsets + exactly-once file sink). Alerts use `foreachBatch` → at-least-once.
+
+## Dashboard (Streamlit)
+
+http://localhost:8501 — starts with `./scripts/start.sh` (container `dashboard`, code in `dashboard/`,
+hot-reloads on save).
+
+| Tab | Shows | Source |
+|-----|-------|--------|
+| Live market | mode badge, KPIs, top gainers/losers/most active, sector treemap, alerts feed, 1-min intraday candles | Kafka `nepse.analytics` + `nepse.alerts`, HDFS `gold/candles_1m` |
+| Stock explorer | candlesticks (bonus-adjusted) + SMA 20/50/200 + Bollinger band, volume, RSI; corporate actions | HDFS `gold/indicators`, `latest_snapshot` |
+| Market & sectors | NEPSE index + SMAs, yearly returns, sector turnover and average return | HDFS `gold/market_daily`, `sector_daily` |
+| Screener | filter all securities by sector / trend / RSI signal / volume spike | HDFS `gold/latest_snapshot` |
+| Pipeline | architecture diagram, Kafka topic sizes, HDFS dataset sizes, data-quality report | Kafka + WebHDFS |
+
+**Mode badge:** `LIVE` / `REPLAY` while the stream has produced output in the last 90 s (REPLAY also
+names the trading day being replayed); otherwise `HISTORICAL`, and the Live tab shows the last trading
+day from the batch layer. Every replay loop is a new *session* (`session_start` field on each tick), so
+the live view and alerts never mix two loops.
+
+**Tip for the demo:** at `--speed 60` one 1-minute candle = one market hour (4 candles per session);
+use `--speed 10` (24-minute session) when showing intraday candles.
+
+`nepse.analytics` is **log-compacted** (`scripts/init.sh`): Kafka keeps only the newest message per
+symbol, so the dashboard loads the current market state in ~1 s however long the stream has run.
 
 ## Running a Spark job
 

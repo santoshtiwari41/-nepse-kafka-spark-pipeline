@@ -8,6 +8,7 @@
 #   8085  Kafka UI
 #   9870  HDFS NameNode UI        9864  DataNode UI / WebHDFS data
 #   8080  Spark Master UI         8081  Spark Worker UI      4040  Spark job UI
+#   8501  Dashboard (Streamlit)
 
 name: nepse
 
@@ -139,6 +140,27 @@ services:
       SPARK_DAEMON_MEMORY: 512m
     depends_on:
       - spark-master
+
+  # ───────────────────────── Visualization ─────────────────────────
+  dashboard:
+    build: ./dashboard
+    image: nepse-dashboard:1.0
+    container_name: dashboard
+    restart: unless-stopped
+    networks: [nepse-net]
+    ports:
+      - "8501:8501"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      WEBHDFS_HOST: namenode
+      WEBHDFS_PORT: 9870
+    volumes:
+      - ./dashboard:/app        # live code reload during development
+    depends_on:
+      kafka:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
 
 networks:
   nepse-net:
