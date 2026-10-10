@@ -44,6 +44,44 @@ Kafka + Spark + HDFS pipeline for Nepal Stock Exchange data. See [plan.md](plan.
 /nepse/checkpoints   Spark streaming checkpoints
 ```
 
+## Data collection (host side)
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+.venv/bin/python ingestion/fetch_companies.py   # 649 companies + sector → data/reference/
+.venv/bin/python ingestion/fetch_history.py     # ~370 companies + NEPSE index → data/historical/
+.venv/bin/python ingestion/build_sample.py      # small offline dataset → data/sample/ (committed)
+```
+
+| Folder | Content | In git? |
+|--------|---------|---------|
+| `data/reference/` | `companies.csv` (symbol, name, sector, instrument type) | yes |
+| `data/sample/` | 42 symbols (top 3 per sector + blue chips) since 2019, NEPSE index, companies — **offline backup** | yes |
+| `data/historical/` | full history: `prices/<SYMBOL>.csv`, `index/NEPSE.csv` (~33 MB) | no (re-download) |
+| `data/recordings/` | recorded live sessions `<date>.jsonl` | no |
+
+All price CSVs share the columns `date,symbol,open,high,low,close,volume,turnover,change_pct`.
+
+### Live producer (LIVE mode)
+
+```bash
+.venv/bin/python ingestion/live_producer.py              # waits for market open, streams to nepse.ticks
+.venv/bin/python ingestion/live_producer.py --no-kafka   # just record the session to data/recordings/
+.venv/bin/python ingestion/live_producer.py --once --force   # single poll even when closed (testing)
+```
+
+Each Kafka message on `nepse.ticks` (key = symbol):
+
+```json
+{"symbol": "NABIL", "ts": "2026-10-09T14:59:59+05:45", "ltp": 536.2, "open": 532.0,
+ "high": 538.0, "low": 531.0, "prev_close": 533.0, "volume": 48779, "turnover": 26163739.6,
+ "last_qty": 10, "change_pct": 0.6, "source": "nepse-api", "mode": "LIVE"}
+```
+
+**Record sessions before the demo:** run the live producer on as many trading days as possible
+(market ~11:00–15:00 NPT). These recordings make REPLAY mode look exactly like a live market.
+
 ## Running a Spark job
 
 Jobs live in `spark/jobs/` (mounted at `/opt/spark-apps`); `data/` is mounted at `/opt/data`.

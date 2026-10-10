@@ -24,7 +24,8 @@ A single traditional database and script do not scale for ingestion, stream proc
 
 ## 2. Key Design Decision: The Demo Must Not Depend on Market Hours
 
-NEPSE trades only **Sunday–Thursday, 11:00–15:00 NPT**, and closes on public holidays.
+NEPSE trades only **~11:00–15:00 NPT on working days** (recently mostly Monday–Friday, some Sundays) and closes for public holidays and festivals such as Dashain and Tihar.
+The live producer asks the NEPSE market-status API whether the market is open instead of hard-coding the days.
 The demo day may fall outside those hours, so the system supports **three data modes**. All three feed the **same Kafka topic**, which means the Spark jobs and the dashboard behave identically in every mode.
 
 | Mode | When to use | Source | How it works |
@@ -42,10 +43,10 @@ The dashboard displays a badge showing the current mode (`LIVE` / `REPLAY` / `HI
 
 | # | Data | Source | Type | Format |
 |---|------|--------|------|--------|
-| 1 | Live market (LTP, volume, change %) | nepalstock.com through the `NepseUnofficialApi` Python library; fallback: ShareSansar/MeroLagani live trading page scraper | Real-time | JSON / HTML |
-| 2 | Historical daily OHLCV (2010 to present) | ShareSansar / NepseAlpha price history; Kaggle "NEPSE stock data" datasets | Batch | CSV |
-| 3 | NEPSE index history | ShareSansar / NepseAlpha index history | Batch | CSV |
-| 4 | Company master (symbol, name, sector, listed shares) | nepalstock.com company list | Reference | JSON / CSV |
+| 1 | Live market (LTP, OHLC, volume, turnover, last trade) | nepalstock.com official API through the `NepseUnofficialApi` Python library; fallback: ShareSansar live-trading page scraper | Real-time | JSON / HTML |
+| 2 | Historical daily OHLCV + turnover, ~370 companies (2011 to present) | GitHub dataset `Aabishkar2/nepse-data` (updated daily); fallback: MeroLagani chart API per symbol | Batch | CSV / JSON |
+| 3 | NEPSE index history (2000 to present) | MeroLagani chart API | Batch | JSON |
+| 4 | Company master (649 securities: symbol, name, sector, instrument type) | nepalstock.com official API | Reference | JSON → CSV |
 | 5 | Recorded live sessions | Our own LIVE-mode recorder (saved while the market is open) | Replay | JSONL |
 
 **Backup:** a curated sample dataset is committed in `data/sample/` so the demo works **fully offline**, even with no internet and a closed market.
@@ -192,9 +193,9 @@ project-demo/
 - [x] `start.sh` / `stop.sh` (+ `init.sh`, `verify.sh`)
 
 ### Phase 1 — Data Collection (Day 2–4)
-- [ ] `fetch_history.py`: download historical OHLCV for all or selected symbols (plus NEPSE index and company list)
-- [ ] Build `data/sample/` offline backup (e.g. top 30 symbols × 5 years, plus 1 recorded day)
-- [ ] `live_producer.py`: test with the NEPSE API, fall back to the ShareSansar scraper
+- [x] `fetch_history.py`: historical OHLCV for 372 companies + NEPSE index; `fetch_companies.py`: 649 companies with sector
+- [x] Build `data/sample/` offline backup (42 symbols, top 3 per sector + blue chips, 2019 → today, 4 MB)
+- [x] `live_producer.py`: NEPSE API with ShareSansar fallback, market-status aware, records to JSONL
 - [ ] **Record 3–5 real live trading sessions during market hours** (needed for a realistic replay)
 
 ### Phase 2 — Kafka Ingestion (Day 4–5)
