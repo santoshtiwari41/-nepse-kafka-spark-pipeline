@@ -1,18 +1,67 @@
 # NEPSE Real-Time & Historical Stock Analytics (Big Data Project)
 
-Kafka + Spark + HDFS pipeline for Nepal Stock Exchange data. See [plan.md](plan.md) for the full design.
+A big data pipeline for the Nepal Stock Exchange (NEPSE) built with **Apache Kafka** (ingestion) and
+**Apache Spark** (stream + batch processing), storing data in an **HDFS** data lake (Parquet) and
+serving it on a **Streamlit** dashboard. It works with the **live market** (NEPSE API), a **replay** of
+any past trading day (when the market is closed), and **31 years of history** (1995 → today).
+Design and rationale: [plan.md](plan.md).
+
+```
+NEPSE API / ShareSansar ──LIVE──┐
+Recordings / history CSV ─REPLAY┴─▶ Kafka nepse.ticks ─▶ Spark Structured Streaming ─▶ Kafka nepse.analytics / alerts ─┐
+History CSV ──bulk load──▶ HDFS bronze ─▶ Spark batch (SQL, MLlib) ─▶ HDFS silver / gold ◀── stream outputs ─────────────┤
+                                               (reference data → stream-static join)                                    ▼
+                                                                                                          Streamlit dashboard
+```
 
 ## Requirements
-- Docker + Docker Compose v2
-- ~4 GB free RAM (stack uses ~1.7 GB idle), 8 GB+ total recommended
-- Python 3.10+ on the host (for producers, later phases)
+- Linux/macOS with Docker + Docker Compose v2 (Windows: WSL2)
+- 8 GB RAM or more (the stack uses ~2–3 GB while streaming), ~6 GB disk for images
+- Python 3.10+ on the host (data collection and producers)
+- Internet **only for the first-time setup** — the demo itself runs fully offline
 
-## Quick start
+## First-time setup (once, online)
 
 ```bash
-./scripts/start.sh     # build + start everything, create Kafka topics & HDFS dirs
-./scripts/verify.sh    # health check + Spark ↔ Kafka ↔ HDFS smoke test
-./scripts/stop.sh      # stop (data kept);  ./scripts/stop.sh --clean wipes all data
+git clone <repo> nepse && cd nepse
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+./scripts/start.sh            # pulls/builds images (~10 min first time), starts everything
+./scripts/verify.sh           # health check + Spark ↔ Kafka ↔ HDFS smoke test → "SMOKE TEST PASSED"
+
+# full history (optional — without it everything uses the committed 42-stock sample)
+.venv/bin/python ingestion/fetch_companies.py
+.venv/bin/python ingestion/fetch_history.py
+
+./scripts/run_batch.sh        # history → HDFS bronze/silver/gold + MLlib model (~5 min)
+```
+
+On every trading day before the demo, record the live session (market ~11:00–15:00 NPT):
+
+```bash
+.venv/bin/python ingestion/live_producer.py --no-kafka     # → data/recordings/<date>.jsonl
+```
+
+## Demo day
+
+```bash
+./scripts/demo.sh             # guided, step by step (Enter between steps)
+./scripts/demo.sh --replay --speed 10    # force REPLAY, slower → more intraday candles
+```
+
+The script starts the stack, shows the batch results (Spark SQL), starts Spark Streaming, streams
+**LIVE** if NEPSE is open or otherwise **REPLAYs** the latest trading day, demonstrates fault tolerance
+(kills and restarts the stream) and points to each dashboard tab. Everything works without internet:
+images are already built, Spark's Kafka connector is baked into the image, the dashboard loads no
+external resources, and replay uses local data.
+
+Manual equivalent:
+
+```bash
+./scripts/start.sh
+./scripts/stream.sh start
+.venv/bin/python ingestion/replay_producer.py --loop      # or live_producer.py when the market is open
+# open http://localhost:8501
 ```
 
 ## Services
@@ -34,13 +83,13 @@ Kafka + Spark + HDFS pipeline for Nepal Stock Exchange data. See [plan.md](plan.
 |-------|-----------|---------|
 | `nepse.ticks` | 3 | Raw price ticks (LIVE or REPLAY), keyed by symbol |
 | `nepse.alerts` | 1 | Volume spike / price jump / circuit alerts |
-| `nepse.analytics` | 1 | Latest computed market snapshot |
+| `nepse.analytics` | 1 | Latest state per symbol from Spark (log-compacted) |
 
 ## HDFS layout
 
 ```
 /nepse/bronze        raw data as received
-/nepse/silver        cleaned, deduplicated, partitioned by date
+/nepse/silver        cleaned, deduplicated, bonus-adjusted (partitioned by year)
 /nepse/gold          indicators, candles, sector stats, alerts
 /nepse/checkpoints   Spark streaming checkpoints
 ```
@@ -104,7 +153,7 @@ Each Kafka message on `nepse.ticks` (key = symbol):
 ## Batch layer (Spark)
 
 ```bash
-./scripts/run_batch.sh                 # load → clean → indicators → SQL showcase (~3.5 min, full history)
+./scripts/run_batch.sh                 # load → clean → indicators → MLlib → SQL showcase (~5 min, full history)
 ./scripts/run_batch.sh --source sample # same, from the offline sample (faster)
 ./scripts/spark_submit.sh batch_queries.py --only oversold   # one Spark SQL query
 ```
@@ -113,6 +162,7 @@ Each Kafka message on `nepse.ticks` (key = symbol):
 |-----|-------|--------|
 | `batch_load_history.py` | CSVs in `data/` | `bronze/{prices,index,companies}` (raw + lineage), `silver/{prices,index,companies}`, `gold/data_quality` |
 | `batch_indicators.py` | silver | `gold/indicators` (per symbol/day), `latest_snapshot`, `volume_baseline`, `sector_daily`, `market_daily` |
+| `ml_predict.py` | gold/indicators | `gold/ml_metrics`, `ml_features`, `ml_predictions` (random forest: up/down next day) |
 | `batch_queries.py` | silver + gold | prints answers: top gainers, sector money flow, oversold, golden crosses, volume spikes, volatility, NEPSE yearly returns, bonus-share adjustments |
 
 **Cleaning rules (silver):** drop rows with non-positive prices or zero volume; drop duplicate
@@ -141,18 +191,18 @@ golden/death cross, trend (UPTREND/DOWNTREND/SIDEWAYS), RSI signal (OVERSOLD/OVE
 | Query | Output | How |
 |-------|--------|-----|
 | `ticks` | HDFS `bronze/ticks` | raw ticks, exactly-once file sink, partitioned by trade_date |
-| `candles_1m` | HDFS `gold/candles_1m` | 1-min event-time windows, 1-min watermark: OHLC, volume, VWAP, trades |
+| `candles_1m` | HDFS `gold/candles_1m` | 1-min event-time windows, 10 s watermark: OHLC, volume, VWAP, trades |
 | `sector_flow` | HDFS `gold/sector_flow_1m` | turnover/volume/trades per sector per minute (equities) |
-| `live_snapshot` | Kafka `nepse.analytics` | latest state per symbol per day (stateful aggregation, update mode) |
-| `alerts` | Kafka `nepse.alerts` + HDFS `gold/alerts` | UPPER/LOWER_CIRCUIT (±9.5 %), VOLUME_SPIKE (≥ 3× 20-day avg), BIG_MOVE (≥ 5 % from open); de-duplicated per symbol/type within the watermark |
+| `live_snapshot` | Kafka `nepse.analytics` | latest state per symbol per session (stateful aggregation, update mode) |
+| `alerts` | Kafka `nepse.alerts` + HDFS `gold/alerts` | UPPER/LOWER_CIRCUIT (±9.5 %), VOLUME_SPIKE (≥ 3× 20-day avg), BIG_MOVE (≥ 5 % from open); de-duplicated per symbol/type/session within the watermark |
 
 Ticks are joined (stream-static) with `silver/companies` (sector) and `gold/volume_baseline`
 (normal volume) from the batch layer — restart the stream after re-running the batch layer to
 pick up new reference data.
 
 Notes
-- A 1-minute candle is written once the watermark passes its end, i.e. when newer ticks
-  arrive — so the last minute of a replay appears when the next replay (`--loop`) starts.
+- A 1-minute candle is written once the watermark (10 s) passes its end, i.e. when newer ticks
+  arrive — about 10–20 s after the minute closes.
 - Each Spark app may use at most 2 of the worker's 4 cores (`spark.cores.max`), so the
   stream and a batch job can run at the same time.
 - Fault tolerance: stopping the stream mid-session and starting it again loses and duplicates
@@ -169,7 +219,7 @@ hot-reloads on save).
 | Stock explorer | candlesticks (bonus-adjusted) + SMA 20/50/200 + Bollinger band, volume, RSI; corporate actions | HDFS `gold/indicators`, `latest_snapshot` |
 | Market & sectors | NEPSE index + SMAs, yearly returns, sector turnover and average return | HDFS `gold/market_daily`, `sector_daily` |
 | Screener | filter all securities by sector / trend / RSI signal / volume spike | HDFS `gold/latest_snapshot` |
-| Pipeline | architecture diagram, Kafka topic sizes, HDFS dataset sizes, data-quality report | Kafka + WebHDFS |
+| Pipeline | architecture diagram, Kafka topic sizes, HDFS dataset sizes, data-quality report, MLlib results | Kafka + WebHDFS |
 
 **Mode badge:** `LIVE` / `REPLAY` while the stream has produced output in the last 90 s (REPLAY also
 names the trading day being replayed); otherwise `HISTORICAL`, and the Live tab shows the last trading
@@ -182,6 +232,21 @@ use `--speed 10` (24-minute session) when showing intraday candles.
 `nepse.analytics` is **log-compacted** (`scripts/init.sh`): Kafka keeps only the newest message per
 symbol, so the dashboard loads the current market state in ~1 s however long the stream has run.
 
+## MLlib model (bonus)
+
+`ml_predict.py` trains a random forest on 10 technical features (returns, RSI, distance from
+SMAs, Bollinger position, volume ratio, volatility) to predict whether a stock closes higher the next
+day. Time-based split: trained on 2015–2024, tested on 2025 onward (no look-ahead).
+
+| Metric | Value |
+|--------|-------|
+| Test accuracy | 55.8 % (baseline "always guess the majority": 55.9 %) |
+| AUC | 0.519 |
+| Accuracy of confident calls (p ≥ 0.6 or ≤ 0.4, ~1 % of days) | 64 % |
+
+Daily moves are mostly noise, so overall the model is no better than the baseline — an honest
+result worth discussing; the confident calls show a weak signal. Shown for demonstration, not advice.
+
 ## Running a Spark job
 
 Jobs live in `spark/jobs/` (mounted at `/opt/spark-apps`); `data/` is mounted at `/opt/data`.
@@ -193,13 +258,16 @@ docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/<job>.py
 ## Project layout
 
 ```
-docker-compose.yml     all services
-config/hadoop.env      HDFS configuration
-spark/Dockerfile       Spark image with Kafka connector baked in (works offline)
-spark/conf/            spark-defaults.conf, log4j2.properties
-spark/jobs/            PySpark jobs
-scripts/               start / stop / init / verify
-data/                  sample, historical, recordings (host side)
+docker-compose.yml      all services (Kafka, Kafka UI, HDFS, Spark, dashboard)
+config/hadoop.env       HDFS configuration
+ingestion/              host-side Python: fetch_*.py (data collection), live_producer.py, replay_producer.py
+spark/Dockerfile        Spark image with the Kafka connector baked in (works offline)
+spark/conf/             spark-defaults.conf, log4j2.properties
+spark/jobs/             PySpark jobs: batch_*.py, ml_predict.py, stream_processor.py, stream_report.py
+dashboard/              Streamlit app (app.py = UI, data.py = Kafka + WebHDFS access)
+scripts/                start / stop / init / verify / run_batch / stream / spark_submit / demo
+data/                   sample (in git), reference (in git), historical + recordings (downloaded/recorded)
+plan.md                 design document: problem, sources, features, architecture
 ```
 
 ## Troubleshooting
@@ -207,4 +275,7 @@ data/                  sample, historical, recordings (host side)
 - **NameNode stuck in safe mode:** `docker exec namenode hdfs dfsadmin -safemode leave`.
 - **Service unhealthy:** `docker logs <container>`.
 - **Edited `spark/conf/*` or `config/hadoop.env`:** restart the containers (`docker compose restart spark-master spark-worker`) — single-file mounts don't pick up edits made by tools that replace the file.
+- **Dashboard shows HISTORICAL while replaying:** the stream isn't running (`./scripts/stream.sh status`) or hasn't produced output in 90 s.
+- **Replay shows nothing new / alerts missing after code changes:** `./scripts/stream.sh stop && ./scripts/stream.sh reset && ./scripts/stream.sh start`.
+- **Changed a Dockerfile or requirements:** `docker compose build` (needs internet), then `./scripts/start.sh`.
 - **Start from scratch:** `./scripts/stop.sh --clean && ./scripts/start.sh`.

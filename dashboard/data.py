@@ -76,6 +76,15 @@ def data_quality():
     return read_parquet(f"{LAKE}/gold/data_quality")
 
 
+@st.cache_data(ttl=600)
+def ml_results():
+    """MLlib output: (metrics dict, feature importances, latest-day predictions)."""
+    metrics = read_parquet(f"{LAKE}/gold/ml_metrics")
+    return (dict(zip(metrics["metric"], metrics["value"])) if not metrics.empty else {},
+            read_parquet(f"{LAKE}/gold/ml_features"),
+            read_parquet(f"{LAKE}/gold/ml_predictions"))
+
+
 @st.cache_data(ttl=15)
 def intraday_candles(symbol, session_start):
     """1-minute candles of one symbol since the session started (excludes earlier replay loops)."""

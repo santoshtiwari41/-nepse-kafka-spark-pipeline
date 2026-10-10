@@ -211,6 +211,13 @@ with tab_stock:
         m[3].metric(f"RSI (14) · {s['rsi_signal'].lower()}", f"{s['rsi_14']:.1f}" if pd.notna(s["rsi_14"]) else "—")
         m[4].metric("Trend", s["trend"])
         m[5].metric("Volatility (20d, ann.)", f"{s['volatility_20']:.1f}%" if pd.notna(s["volatility_20"]) else "—")
+        _, _, preds = data.ml_results()
+        pred = preds[preds["symbol"] == symbol] if not preds.empty else preds
+        if not pred.empty:
+            p = pred.iloc[0]
+            st.caption(f"Spark MLlib model: **{p['p_up'] * 100:.0f}% chance of closing higher** on the next "
+                       f"trading day → {p['signal'].lower()}. (Experimental — see the Pipeline tab for how "
+                       f"well the model does; not investment advice.)")
 
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.6, 0.15, 0.25],
                             vertical_spacing=0.03)
@@ -349,6 +356,29 @@ with tab_screen:
 
 
 # ───────────────────────── 5. pipeline ─────────────────────────
+def ml_section():
+    metrics, features, _ = data.ml_results()
+    if not metrics:
+        return
+    st.markdown("**Spark MLlib — will a stock close higher tomorrow?** (random forest, time-based split)")
+    c = st.columns(3)
+    c[0].metric("Accuracy (test)", f"{float(metrics['accuracy']) * 100:.1f}%")
+    c[1].metric("Baseline (always majority)", f"{float(metrics['baseline_accuracy']) * 100:.1f}%")
+    c[2].metric("AUC", metrics["auc"])
+    st.caption(f"Trained on {int(metrics['train_rows']):,} stock-days before {metrics['split_date']}, tested on "
+               f"{int(metrics['test_rows']):,} after. Overall the model barely beats guessing — daily moves are "
+               f"mostly noise — but its {int(metrics['confident_rows']):,} confident calls (≥ 60 % sure) were "
+               f"right {float(metrics['confident_accuracy']) * 100:.0f}% of the time.")
+    features = features.sort_values("importance")
+    fig = go.Figure(go.Bar(y=features["feature"], x=features["importance"], orientation="h",
+                           marker_color=SERIES[0], text=[f"{v:.2f}" for v in features["importance"]],
+                           textposition="outside", cliponaxis=False,
+                           hovertemplate="%{y}: %{x:.3f}<extra></extra>"))
+    fig.update_xaxes(title_text="Feature importance")
+    st.plotly_chart(style(fig, 320, legend=False), key="ml_features")
+
+
+
 with tab_pipe:
     st.markdown("**Architecture**")
     st.graphviz_chart("""
@@ -383,6 +413,7 @@ with tab_pipe:
             st.error(f"Kafka unavailable: {exc}")
         st.markdown("**Data quality (batch cleaning)**")
         st.dataframe(data.data_quality(), hide_index=True)
+        ml_section()
     with right:
         st.markdown("**HDFS data lake (Parquet)**")
         usage = data.hdfs_usage()

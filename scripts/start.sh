@@ -4,7 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "Starting containers..."
-docker compose up -d --build
+# No --build: images are built once (online) and reused, so this also works offline on demo day.
+# Compose still builds an image that doesn't exist yet. After editing a Dockerfile: docker compose build
+docker compose up -d
 
 wait_healthy() {  # container timeout_seconds
   local status

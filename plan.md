@@ -222,9 +222,10 @@ project-demo/
 - [x] Stream sessions (each replay loop is its own session) + log-compacted `nepse.analytics` (dashboard catch-up 19 s → 1.4 s)
 
 ### Phase 6 — Bonus and Polish (Day 13–15)
-- [ ] (Bonus) MLlib next-day up/down prediction with accuracy shown
-- [ ] `demo.sh` sequence, README with setup guide
-- [ ] Rehearse the demo **fully offline** (Wi-Fi off) at least twice
+- [x] (Bonus) MLlib next-day up/down prediction: random forest, time-based split → accuracy 55.8 % vs 55.9 % baseline, AUC 0.519, confident calls 64 % (shown in dashboard)
+- [x] `demo.sh` guided sequence (LIVE/REPLAY auto-select, fault-tolerance step), README = setup + implementation guide
+- [x] Offline readiness: dashboard loads 0 external resources; `start.sh` no longer rebuilds images (forced rebuild re-downloads jars)
+- [ ] Rehearse the demo **fully offline** (Wi-Fi off) at least twice — *to do by the team*
 
 ### Phase 7 — Report (parallel, finalize after demo)
 - [ ] Problem definition, sources, features (part **a**)
