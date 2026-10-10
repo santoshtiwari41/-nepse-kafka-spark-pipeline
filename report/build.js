@@ -1,4 +1,6 @@
-// Builds the project report:  cd report && npm install docx@9.5.1 && node build.js NEPSE_BigData_Project_Report.docx
+// Builds the project report as Word (.docx) AND a self-contained HTML page from ONE content
+// definition, so both are always identical:
+//   cd report && npm install docx@9.5.1 && node build.js      → NEPSE_BigData_Project_Report.{docx,html}
 // Figures live in figures/ (architecture.png is rendered from figures/diagram.html).
 const fs = require("fs");
 const path = require("path");
@@ -8,132 +10,57 @@ const {
   LevelFormat, VerticalAlign, PageOrientation,
 } = require("docx");
 
-const OUT = process.argv[2] || "report.docx";
+const BASE = process.argv[2] || path.join(__dirname, "NEPSE_BigData_Project_Report");
 const IMG = (f) => fs.readFileSync(path.join(__dirname, "figures", f));
 
-// ───────────── page & style constants ─────────────
+// ───────────── page & style constants (Word) ─────────────
 const PAGE_W = 11906, PAGE_H = 16838, MARGIN = 1440;      // A4, 1" margins
 const TEXT_W = PAGE_W - 2 * MARGIN;                         // 9026 DXA ≈ 6.27"
 const PX_W = 600;                                           // full-width image, px at 96 dpi
 const FONT = "Calibri", MONO = "Consolas";
-const ACCENT = "1F4E79", HEADER_FILL = "DCE6F1", CODE_FILL = "F2F2F2", PLACEHOLDER = "FFF2CC";
+const ACCENT = "1F4E79", HEADER_FILL = "DCE6F1", CODE_FILL = "F2F2F2";
 
-// ───────────── helpers ─────────────
-// inline markup: **bold**, `code`
-function runs(text, base = {}) {
-  const out = [];
-  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
-  let last = 0, m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(new TextRun({ text: text.slice(last, m.index), ...base }));
-    const t = m[0];
-    if (t.startsWith("**")) out.push(new TextRun({ text: t.slice(2, -2), bold: true, ...base }));
-    else out.push(new TextRun({ text: t.slice(1, -1), font: MONO, size: 19, ...base }));
-    last = m.index + t.length;
-  }
-  if (last < text.length) out.push(new TextRun({ text: text.slice(last), ...base }));
-  return out;
-}
-const P = (text, opts = {}) => new Paragraph({ children: runs(text), spacing: { after: 120, line: 276 },
-  alignment: opts.center ? AlignmentType.CENTER : AlignmentType.JUSTIFIED, ...opts.para });
-const H1 = (t) => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(t)], pageBreakBefore: true });
-const H1keep = (t) => new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(t)] });
-const H2 = (t) => new Paragraph({ heading: HeadingLevel.HEADING_2, keepNext: true, children: [new TextRun(t)] });
-const H3 = (t) => new Paragraph({ heading: HeadingLevel.HEADING_3, keepNext: true, children: [new TextRun(t)] });
-const bullet = (t, level = 0) => new Paragraph({ numbering: { reference: "bullets", level }, children: runs(t),
-  spacing: { after: 60, line: 264 } });
-const numbered = (t, ref = "steps") => new Paragraph({ numbering: { reference: ref, level: 0 }, children: runs(t),
-  spacing: { after: 60, line: 264 } });
-const placeholder = (t) => new TextRun({ text: t, shading: { type: ShadingType.CLEAR, color: "auto", fill: "FFFF00" } });
-
-function code(lines) {
-  return lines.map((l, i) => new Paragraph({
-    children: [new TextRun({ text: l || " ", font: MONO, size: 18 })],
-    shading: { type: ShadingType.CLEAR, color: "auto", fill: CODE_FILL },
-    spacing: { before: i === 0 ? 60 : 0, after: i === lines.length - 1 ? 160 : 0, line: 240 },
-    indent: { left: 120, right: 120 },
-  }));
-}
-
+// ───────────── content helpers → IR nodes (rendered to Word and HTML below) ─────────────
+// inline markup in text: **bold**, `code`
+const P = (text, opts = {}) => ({ t: "p", text, center: !!opts.center });
+const H1 = (text) => ({ t: "h1", text, pageBreak: true });
+const H1keep = (text) => ({ t: "h1", text, pageBreak: false });
+const H2 = (text) => ({ t: "h2", text });
+const H3 = (text) => ({ t: "h3", text });
+const bullet = (text, level = 0) => ({ t: "bullet", text, level });
+const numbered = (text, ref = "steps") => ({ t: "num", text, ref });
+const code = (lines) => [{ t: "code", lines }];
 let tableNo = 0, figNo = 0;
-function caption(kind, text) {
-  const n = kind === "Table" ? ++tableNo : ++figNo;
-  const p = new Paragraph({ alignment: AlignmentType.CENTER, keepNext: kind === "Table",
-    spacing: kind === "Table" ? { before: 220, after: 80 } : { before: 60, after: 200 },
-    children: [new TextRun({ text: `${kind} ${n}: `, bold: true, size: 20, color: ACCENT }),
-               new TextRun({ text, italics: true, size: 20 })] });
-  p._tableCaption = kind === "Table";
-  return p;
-}
-// captions are written after each table in the content below; move them above it
+const caption = (kind, text) => ({ t: "caption", kind, n: kind === "Table" ? ++tableNo : ++figNo, text });
+const table = (headers, rows, widths, opts = {}) => ({ t: "table", headers, rows, widths, align: opts.align || [] });
+const figure = (file, w, h, text) => [{ t: "img", file, w, h, alt: text }, caption("Figure", text)];
+const imgH = (w, h, targetW = PX_W) => Math.round((h * targetW) / w);
+const PAGEBREAK = { t: "pagebreak" };
+
+// table captions are written after each table in the content; move them above it
 function captionsAbove(items) {
   const out = [...items];
   for (let i = 0; i < out.length - 1; i++) {
-    if (out[i] instanceof Table && out[i + 1]._tableCaption) {
+    if (out[i].t === "table" && out[i + 1].t === "caption" && out[i + 1].kind === "Table") {
       [out[i], out[i + 1]] = [out[i + 1], out[i]]; i++;
-      out.splice(i + 1, 0, new Paragraph({ spacing: { after: 120 }, children: [] }));
+      out.splice(i + 1, 0, { t: "spacer" });
     }
   }
   return out;
 }
 
-const border = { style: BorderStyle.SINGLE, size: 4, color: "A6A6A6" };
-const borders = { top: border, bottom: border, left: border, right: border };
-function table(headers, rows, widthsPct, opts = {}) {
-  const widths = widthsPct.map((p) => Math.round((TEXT_W * p) / 100));
-  widths[widths.length - 1] = TEXT_W - widths.slice(0, -1).reduce((a, b) => a + b, 0);
-  const cell = (text, i, header) => new TableCell({
-    width: { size: widths[i], type: WidthType.DXA }, borders,
-    shading: header ? { type: ShadingType.CLEAR, color: "auto", fill: HEADER_FILL } : undefined,
-    margins: { top: 50, bottom: 50, left: 90, right: 90 }, verticalAlign: VerticalAlign.CENTER,
-    children: [new Paragraph({ spacing: { after: 0, line: 252 },
-      alignment: opts.align && opts.align[i] === "r" ? AlignmentType.RIGHT : AlignmentType.LEFT,
-      children: runs(String(text), { size: 19, bold: header || undefined }) })],
-  });
-  return new Table({
-    width: { size: TEXT_W, type: WidthType.DXA }, columnWidths: widths,
-    rows: [new TableRow({ tableHeader: true, children: headers.map((h, i) => cell(h, i, true)) }),
-           ...rows.map((r) => new TableRow({ cantSplit: true, children: r.map((c, i) => cell(c, i, false)) }))],
-  });
-}
-
-function figure(file, pxW, pxH, text) {
-  return [
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 40 }, keepNext: true,
-      children: [new ImageRun({ type: "png", data: IMG(file), transformation: { width: pxW, height: pxH },
-        altText: { title: text, description: text, name: file } })] }),
-    caption("Figure", text),
-  ];
-}
-const imgH = (w, h, targetW = PX_W) => Math.round((h * targetW) / w);
-
 // ───────────── content ─────────────
-const titlePage = [
-  new Paragraph({ spacing: { before: 1200, after: 120 }, alignment: AlignmentType.CENTER,
-    children: [placeholder("[NAME OF COLLEGE / UNIVERSITY]")].map((r) => r) }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 600 },
-    children: [placeholder("[Department / Faculty]")] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 120 },
-    children: [new TextRun({ text: "Project Report on", size: 26 })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 160 },
-    children: [new TextRun({ text: "Real-Time and Historical Analytics of the", bold: true, size: 40, color: ACCENT })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 300 },
-    children: [new TextRun({ text: "Nepal Stock Exchange (NEPSE) using a Big Data Stack", bold: true, size: 40, color: ACCENT })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 900 },
-    children: [new TextRun({ text: "Apache Kafka · Apache Spark (Structured Streaming, SQL, MLlib) · Hadoop HDFS", size: 24, italics: true })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 120 },
-    children: [new TextRun({ text: "Submitted by", size: 24, bold: true })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 60 },
-    children: [placeholder("[Student 1 Name]  —  Roll No. [   ]")] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 500 },
-    children: [placeholder("[Student 2 Name]  —  Roll No. [   ]")] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 120 },
-    children: [new TextRun({ text: "Submitted to", size: 24, bold: true })] }),
-  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 500 },
-    children: [placeholder("[Teacher's Name], [Course name / code]")] }),
-  new Paragraph({ alignment: AlignmentType.CENTER,
-    children: [placeholder("[Submission date]")] }),
-];
+const titlePage = [{
+  t: "title",
+  institution: ["Tribhuvan University", "Institute of Engineering", "Pulchowk Campus"],
+  pre: "A Project Report on",
+  title: ["Real-Time and Historical Analytics of the", "Nepal Stock Exchange (NEPSE) using a Big Data Stack"],
+  tools: "Apache Kafka · Apache Spark (Structured Streaming, SQL, MLlib) · Hadoop HDFS",
+  course: "Submitted for the course Big Data Technology",
+  by: ["Santosh Tiwari (082MSDSA024)", "Arbind Sah (082MSDSA006)"],
+  to: "[Teacher's Name]",
+  date: "[Submission date]",
+}];
 
 const abstract = [
   H1keep("Abstract"),
@@ -142,11 +69,7 @@ const abstract = [
   P("**Keywords:** big data, Apache Kafka, Apache Spark, Structured Streaming, HDFS, Parquet, Lambda architecture, NEPSE, stock market analytics."),
 ];
 
-const toc = [
-  H1keep("Table of Contents"),
-  new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-2" }),
-  new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: "(If the table is empty, right-click it in Word and choose “Update Field”.)", italics: true, size: 18, color: "7F7F7F" })] }),
-];
+const toc = [H1keep("Table of Contents"), { t: "toc" }];
 
 const ch1 = [
   H1("1. Introduction"),
@@ -539,7 +462,7 @@ const appendix = [
     "plan.md, README.md      design document and setup guide",
   ]),
   H1("Appendix C: Division of Work"),
-  table(["Student 1 — ingestion and storage", "Student 2 — processing and visualisation"], [
+  table(["Santosh Tiwari (082MSDSA024) — ingestion and storage", "Arbind Sah (082MSDSA006) — processing and visualisation"], [
     ["Docker Compose setup (Kafka, HDFS)", "Spark cluster configuration"],
     ["Data collection scripts and data cleaning rules", "Batch indicators and Spark SQL queries"],
     ["Live producer and session recordings", "Spark Structured Streaming job and alerts"],
@@ -550,16 +473,115 @@ const appendix = [
   caption("Table", "Division of work (adjust to match the actual split)"),
 ];
 
-// ───────────── document ─────────────
+// ───────────── document order ─────────────
+const partA = captionsAbove([...titlePage, PAGEBREAK, ...abstract, PAGEBREAK, ...toc, ...ch1, ...ch2, ...ch3, ...ch4, ...ch5]);
+const partB = ch5diagram;                                  // landscape page in Word
+const partC = captionsAbove([...ch5b, ...ch6, ...ch7, ...ch8, ...ch9, ...ch10, ...refs, ...appendix]);
+const isPlaceholder = (t) => /^\[.*\]$/.test(t);
+
+// ═════════════════════════════ Word renderer ═════════════════════════════
+function runs(text, base = {}) {
+  const out = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(new TextRun({ text: text.slice(last, m.index), ...base }));
+    const t = m[0];
+    if (t.startsWith("**")) out.push(new TextRun({ text: t.slice(2, -2), bold: true, ...base }));
+    else out.push(new TextRun({ text: t.slice(1, -1), font: MONO, size: 19, ...base }));
+    last = m.index + t.length;
+  }
+  if (last < text.length) out.push(new TextRun({ text: text.slice(last), ...base }));
+  return out;
+}
+const centered = (children, spacing = {}) => new Paragraph({ alignment: AlignmentType.CENTER, spacing, children });
+const textRun = (text, opts = {}) => new TextRun(isPlaceholder(text)
+  ? { text, ...opts, shading: { type: ShadingType.CLEAR, color: "auto", fill: "FFFF00" } } : { text, ...opts });
+const border = { style: BorderStyle.SINGLE, size: 4, color: "A6A6A6" };
+const borders = { top: border, bottom: border, left: border, right: border };
+
+function docxTable(n) {
+  const widths = n.widths.map((p) => Math.round((TEXT_W * p) / 100));
+  widths[widths.length - 1] = TEXT_W - widths.slice(0, -1).reduce((a, b) => a + b, 0);
+  const cell = (text, i, header) => new TableCell({
+    width: { size: widths[i], type: WidthType.DXA }, borders,
+    shading: header ? { type: ShadingType.CLEAR, color: "auto", fill: HEADER_FILL } : undefined,
+    margins: { top: 50, bottom: 50, left: 90, right: 90 }, verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({ spacing: { after: 0, line: 252 },
+      alignment: n.align[i] === "r" ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      children: runs(String(text), { size: 19, bold: header || undefined }) })],
+  });
+  return new Table({
+    width: { size: TEXT_W, type: WidthType.DXA }, columnWidths: widths,
+    rows: [new TableRow({ tableHeader: true, children: n.headers.map((h, i) => cell(h, i, true)) }),
+           ...n.rows.map((r) => new TableRow({ cantSplit: true, children: r.map((c, i) => cell(c, i, false)) }))],
+  });
+}
+
+function docxTitle(n) {
+  const [uni, inst, campus] = n.institution;
+  return [
+    centered([textRun(uni, { size: 28, bold: true })], { before: 900, after: 60 }),
+    centered([textRun(inst, { size: 26 })], { after: 60 }),
+    centered([textRun(campus, { size: 28, bold: true })], { after: 700 }),
+    centered([textRun(n.pre, { size: 26 })], { after: 160 }),
+    ...n.title.map((t, i) => centered([textRun(t, { bold: true, size: 40, color: ACCENT })],
+      { after: i === n.title.length - 1 ? 300 : 120 })),
+    centered([textRun(n.tools, { size: 24, italics: true })], { after: 400 }),
+    centered(runs(n.course.replace("Big Data Technology", "**Big Data Technology**"), { size: 26 }), { after: 700 }),
+    centered([textRun("Submitted by", { size: 24, bold: true })], { after: 120 }),
+    ...n.by.map((t, i) => centered([textRun(t, { size: 24 })], { after: i === n.by.length - 1 ? 500 : 60 })),
+    centered([textRun("Submitted to", { size: 24, bold: true })], { after: 120 }),
+    centered([textRun(n.to, { size: 24 })], { after: 500 }),
+    centered([textRun(n.date, { size: 24 })]),
+  ];
+}
+
+function docxNode(n) {
+  switch (n.t) {
+    case "title": return docxTitle(n);
+    case "p": return [new Paragraph({ children: runs(n.text), spacing: { after: 120, line: 276 },
+      alignment: n.center ? AlignmentType.CENTER : AlignmentType.JUSTIFIED })];
+    case "h1": return [new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(n.text)], pageBreakBefore: n.pageBreak })];
+    case "h2": return [new Paragraph({ heading: HeadingLevel.HEADING_2, keepNext: true, children: [new TextRun(n.text)] })];
+    case "h3": return [new Paragraph({ heading: HeadingLevel.HEADING_3, keepNext: true, children: [new TextRun(n.text)] })];
+    case "bullet": return [new Paragraph({ numbering: { reference: "bullets", level: n.level }, children: runs(n.text),
+      spacing: { after: 60, line: 264 } })];
+    case "num": return [new Paragraph({ numbering: { reference: n.ref, level: 0 }, children: runs(n.text),
+      spacing: { after: 60, line: 264 } })];
+    case "code": return n.lines.map((l, i) => new Paragraph({
+      children: [new TextRun({ text: l || " ", font: MONO, size: 18 })],
+      shading: { type: ShadingType.CLEAR, color: "auto", fill: CODE_FILL },
+      spacing: { before: i === 0 ? 60 : 0, after: i === n.lines.length - 1 ? 160 : 0, line: 240 },
+      indent: { left: 120, right: 120 } }));
+    case "caption": return [new Paragraph({ alignment: AlignmentType.CENTER, keepNext: n.kind === "Table",
+      spacing: n.kind === "Table" ? { before: 220, after: 80 } : { before: 60, after: 200 },
+      children: [new TextRun({ text: `${n.kind} ${n.n}: `, bold: true, size: 20, color: ACCENT }),
+                 new TextRun({ text: n.text, italics: true, size: 20 })] })];
+    case "table": return [docxTable(n)];
+    case "img": return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 40 }, keepNext: true,
+      children: [new ImageRun({ type: "png", data: IMG(n.file), transformation: { width: n.w, height: n.h },
+        altText: { title: n.alt, description: n.alt, name: n.file } })] })];
+    case "pagebreak": return [new Paragraph({ children: [new PageBreak()] })];
+    case "spacer": return [new Paragraph({ spacing: { after: 120 }, children: [] })];
+    case "toc": return [
+      new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-2" }),
+      new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: "(If the table is empty, right-click it in Word and choose “Update Field”.)", italics: true, size: 18, color: "7F7F7F" })] })];
+    default: throw new Error(`unknown node ${n.t}`);
+  }
+}
+const toDocx = (nodes) => nodes.flatMap(docxNode);
+
 const margin = { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN };
 const portrait = { size: { width: PAGE_W, height: PAGE_H }, margin };
 const landscape = { size: { width: PAGE_W, height: PAGE_H, orientation: PageOrientation.LANDSCAPE }, margin };
 const footer = () => new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER,
   children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: "7F7F7F" })] })] });
+
 const doc = new Document({
-  creator: "NEPSE Big Data Project",
+  creator: "Santosh Tiwari, Arbind Sah",
   title: "Real-Time and Historical Analytics of NEPSE using a Big Data Stack",
-  description: "Big data project report: Kafka, Spark, HDFS",
+  description: "Big Data Technology project report, Pulchowk Campus: Kafka, Spark, HDFS",
   features: { updateFields: true },
   styles: {
     default: {
@@ -587,12 +609,210 @@ const doc = new Document({
   sections: [
     { properties: { titlePage: true, page: portrait },
       footers: { default: footer(), first: new Footer({ children: [new Paragraph({ children: [] })] }) },
-      children: captionsAbove([...titlePage, new Paragraph({ children: [new PageBreak()] }), ...abstract,
-        new Paragraph({ children: [new PageBreak()] }), ...toc, ...ch1, ...ch2, ...ch3, ...ch4, ...ch5]) },
-    { properties: { page: landscape }, footers: { default: footer() }, children: ch5diagram },
-    { properties: { page: portrait }, footers: { default: footer() },
-      children: captionsAbove([...ch5b, ...ch6, ...ch7, ...ch8, ...ch9, ...ch10, ...refs, ...appendix]) },
+      children: toDocx(partA) },
+    { properties: { page: landscape }, footers: { default: footer() }, children: toDocx(partB) },
+    { properties: { page: portrait }, footers: { default: footer() }, children: toDocx(partC) },
   ],
 });
 
-Packer.toBuffer(doc).then((buf) => { fs.writeFileSync(OUT, buf); console.log(`wrote ${OUT} (${(buf.length / 1024).toFixed(0)} KB)`); });
+// ═════════════════════════════ HTML renderer ═════════════════════════════
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const inline = (text) => esc(text)
+  .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  .replace(/`([^`]+)`/g, "<code>$1</code>")
+  .replace(/(https?:\/\/[^\s<]+[^\s<.,)])/g, '<a href="$1">$1</a>');
+const ph = (text) => (isPlaceholder(text) ? `<mark>${esc(text)}</mark>` : esc(text));
+const slug = (t) => "s-" + t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const dataUri = (file) => `data:image/png;base64,${IMG(file).toString("base64")}`;
+
+function htmlTitle(n) {
+  const [uni, inst, campus] = n.institution;
+  return `<section class="cover">
+  <div class="inst"><div class="uni">${esc(uni)}</div><div>${esc(inst)}</div><div class="campus">${esc(campus)}</div></div>
+  <div class="pre">${esc(n.pre)}</div>
+  <h1 class="title">${n.title.map(esc).join("<br>")}</h1>
+  <div class="tools">${esc(n.tools)}</div>
+  <div class="course">${inline(n.course.replace("Big Data Technology", "**Big Data Technology**"))}</div>
+  <div class="who"><div class="label">Submitted by</div>${n.by.map((b) => `<div>${esc(b)}</div>`).join("")}</div>
+  <div class="who"><div class="label">Submitted to</div><div>${ph(n.to)}</div></div>
+  <div class="date">${ph(n.date)}</div>
+</section>`;
+}
+
+function htmlTable(n) {
+  const cols = n.widths.map((w) => `<col style="width:${w}%">`).join("");
+  const cell = (tag, v, i) => `<${tag}${n.align[i] === "r" ? ' class="r"' : ""}>${inline(String(v))}</${tag}>`;
+  return `<div class="tbl"><table><colgroup>${cols}</colgroup>
+<thead><tr>${n.headers.map((h, i) => cell("th", h, i)).join("")}</tr></thead>
+<tbody>${n.rows.map((r) => `<tr>${r.map((v, i) => cell("td", v, i)).join("")}</tr>`).join("\n")}</tbody></table></div>`;
+}
+
+function toHtml(nodes, headings) {
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.t === "bullet" || n.t === "num") {            // group consecutive list items
+      const items = [];
+      while (i < nodes.length && nodes[i].t === n.t && (n.t === "bullet" || nodes[i].ref === n.ref)) items.push(nodes[i++]);
+      i--;
+      out.push(n.t === "bullet"
+        ? `<ul>${items.map((it) => `<li class="l${it.level}">${inline(it.text)}</li>`).join("")}</ul>`
+        : `<ol class="${n.ref === "refs" ? "refs" : ""}">${items.map((it) => `<li>${inline(it.text)}</li>`).join("")}</ol>`);
+      continue;
+    }
+    switch (n.t) {
+      case "title": out.push(htmlTitle(n)); break;
+      case "p": out.push(`<p${n.center ? ' class="c"' : ""}>${inline(n.text)}</p>`); break;
+      case "h1": out.push(`<h1 id="${slug(n.text)}"${n.pageBreak ? ' class="chapter"' : ""}>${esc(n.text)}</h1>`); break;
+      case "h2": out.push(`<h2 id="${slug(n.text)}">${esc(n.text)}</h2>`); break;
+      case "h3": out.push(`<h3>${esc(n.text)}</h3>`); break;
+      case "code": out.push(`<pre><code>${esc(n.lines.join("\n"))}</code></pre>`); break;
+      case "caption": out.push(`<p class="caption ${n.kind.toLowerCase()}"><b>${n.kind} ${n.n}:</b> <i>${esc(n.text)}</i></p>`); break;
+      case "table": out.push(htmlTable(n)); break;
+      case "img": {
+        const wide = n.file === "architecture.png";
+        const maxW = wide ? 1400 : Math.round(n.w * 1.5);
+        out.push(`<div class="fig${wide ? " wide" : ""}"><img src="${dataUri(n.file)}" alt="${esc(n.alt)}" style="max-width:min(100%,${maxW}px)" loading="lazy" title="Click to enlarge"></div>`);
+        break;
+      }
+      case "toc": out.push(`<nav class="toc"><ol>${headings.map((h) =>
+        `<li class="${h.t}"><a href="#${slug(h.text)}">${esc(h.text)}</a></li>`).join("")}</ol></nav>`); break;
+      case "pagebreak": case "spacer": break;
+      default: throw new Error(`unknown node ${n.t}`);
+    }
+  }
+  return out.join("\n");
+}
+
+const CSS = `
+:root { --ink:#1a1a1a; --muted:#5f6368; --accent:#1F4E79; --line:#A6A6A6; --head:#DCE6F1; --code:#F2F2F2;
+        --paper:#ffffff; --desk:#e9ecf1; --mark:#fff176; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+body { margin: 0; background: var(--desk); color: var(--ink);
+       font: 17px/1.65 Calibri, Carlito, "Segoe UI", system-ui, -apple-system, sans-serif; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); }
+.side { display: none; }
+@media (min-width: 1360px) {
+  .layout { grid-template-columns: 290px minmax(0, 1fr); }
+  .side { display: block; position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 28px 18px 28px 26px;
+          background: #f7f8fa; border-right: 1px solid #d9dde3; font-size: 14px; line-height: 1.4; }
+  .side .h { font-weight: 700; color: var(--accent); margin-bottom: 10px; font-size: 15px; }
+  .side a { display: block; color: #33393f; text-decoration: none; padding: 3px 6px; border-radius: 4px; }
+  .side a.h2 { padding-left: 20px; color: var(--muted); font-size: 13px; }
+  .side a:hover, .side a.on { background: #e3ebf5; color: var(--accent); }
+}
+main { width: 100%; max-width: 940px; margin: 28px auto 60px; background: var(--paper);
+       padding: 64px 72px; box-shadow: 0 2px 14px rgba(0,0,0,.08); border-radius: 4px; }
+@media (max-width: 720px) { main { margin: 0; padding: 24px 16px; border-radius: 0; box-shadow: none; } body { font-size: 16px; } }
+h1, h2, h3 { color: var(--accent); line-height: 1.25; }
+h1 { font-size: 1.85em; margin: 1.4em 0 .6em; }
+h1.chapter { border-top: 3px solid var(--head); padding-top: 1.1em; margin-top: 2.2em; }
+h2 { font-size: 1.4em; margin: 1.5em 0 .5em; }
+h3 { font-size: 1.12em; color: #404040; margin: 1.2em 0 .4em; }
+p { margin: 0 0 .75em; text-align: justify; hyphens: auto; }
+p.c { text-align: center; }
+ul, ol { margin: .2em 0 .9em; padding-left: 1.8em; }
+li { margin: .25em 0; }
+li.l1 { margin-left: 1.6em; list-style: "– "; }
+ol.refs { list-style: none; counter-reset: ref; padding-left: 2.6em; }
+ol.refs li { counter-increment: ref; position: relative; overflow-wrap: anywhere; }
+ol.refs li::before { content: "[" counter(ref) "]"; position: absolute; left: -2.6em; color: var(--muted); }
+code { font-family: Consolas, "DejaVu Sans Mono", Menlo, monospace; font-size: .88em; background: #f1f3f4; padding: .05em .3em; border-radius: 3px; }
+pre { background: var(--code); padding: 12px 16px; border-radius: 4px; overflow-x: auto; line-height: 1.45; margin: .3em 0 1em; }
+pre code { background: none; padding: 0; font-size: .82em; }
+a { color: #1f63a8; }
+mark { background: var(--mark); padding: 0 .2em; }
+.tbl { overflow-x: auto; margin: .2em 0 1.1em; }
+table { width: 100%; border-collapse: collapse; font-size: .9em; line-height: 1.4; }
+th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: middle; }
+th { background: var(--head); font-weight: 700; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.caption { text-align: center; font-size: .92em; margin: .3em 0 1.2em; }
+.caption b { color: var(--accent); }
+.caption.table { margin: 1.2em 0 .4em; }
+.fig { text-align: center; margin: 1em 0 .3em; }
+.fig img { width: 100%; height: auto; border: 1px solid #e3e5e8; border-radius: 3px; cursor: zoom-in; }
+@media (min-width: 1100px) { .fig.wide { margin-left: -60px; margin-right: -60px; } }
+.toc ol { list-style: none; padding: 0; margin: 0 0 1em; columns: 1; }
+.toc li { margin: .15em 0; }
+.toc li.h2 { padding-left: 1.6em; font-size: .95em; }
+.toc a { text-decoration: none; color: var(--ink); }
+.toc a:hover { color: var(--accent); text-decoration: underline; }
+.cover { text-align: center; padding: 30px 0 50px; border-bottom: 3px solid var(--head); margin-bottom: 20px; }
+.cover .inst { font-size: 1.15em; line-height: 1.5; }
+.cover .uni, .cover .campus { font-weight: 700; }
+.cover .pre { margin-top: 48px; font-size: 1.1em; }
+.cover h1.title { font-size: 2em; margin: 12px 0 18px; }
+.cover .tools { font-style: italic; color: #333; }
+.cover .course { margin-top: 30px; font-size: 1.12em; }
+.cover .who { margin-top: 34px; font-size: 1.05em; }
+.cover .label { font-weight: 700; margin-bottom: 6px; }
+.cover .date { margin-top: 30px; }
+#lb { position: fixed; inset: 0; background: rgba(15,18,24,.86); display: none; align-items: center; justify-content: center;
+      padding: 20px; cursor: zoom-out; z-index: 10; }
+#lb.on { display: flex; }
+#lb img { max-width: 100%; max-height: 100%; background: #fff; border-radius: 4px; }
+@media print {
+  body { background: #fff; font-size: 11pt; }
+  .side, #lb { display: none !important; }
+  .layout { display: block; }
+  main { box-shadow: none; margin: 0; padding: 0; max-width: none; }
+  .cover { border: none; page-break-after: always; min-height: 90vh; }
+  h1.chapter { page-break-before: always; border: none; padding-top: 0; margin-top: 0; }
+  h2, h3, .caption.table { page-break-after: avoid; }
+  tr, img, pre { page-break-inside: avoid; }
+  .fig.wide { margin: 0; }
+}`;
+
+const JS = `
+const lb = document.getElementById("lb"), lbImg = lb.querySelector("img");
+document.querySelectorAll(".fig img").forEach((img) => img.addEventListener("click", () => {
+  lbImg.src = img.src; lbImg.alt = img.alt; lb.classList.add("on"); }));
+lb.addEventListener("click", () => lb.classList.remove("on"));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") lb.classList.remove("on"); });
+const links = [...document.querySelectorAll(".side a")];
+const targets = links.map((a) => document.getElementById(a.hash.slice(1))).filter(Boolean);
+const spy = () => {
+  let cur = targets[0];
+  for (const t of targets) if (t.getBoundingClientRect().top < 120) cur = t;
+  links.forEach((a) => a.classList.toggle("on", cur && a.hash === "#" + cur.id));
+};
+document.addEventListener("scroll", spy, { passive: true }); spy();`;
+
+function buildHtml() {
+  const all = [...partA, ...partB, ...partC];
+  const headings = all.filter((n) => (n.t === "h1" || n.t === "h2") && n.text !== "Table of Contents");
+  const side = headings.map((h) => `<a class="${h.t}" href="#${slug(h.text)}">${esc(h.text)}</a>`).join("\n");
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEPSE Big Data Project Report</title>
+<meta name="description" content="Big Data Technology project report (Pulchowk Campus): real-time and historical NEPSE analytics with Kafka, Spark and HDFS — Santosh Tiwari, Arbind Sah">
+<style>${CSS}</style>
+</head>
+<body>
+<div class="layout">
+<aside class="side"><div class="h">Contents</div>
+${side}
+</aside>
+<main>
+${toHtml(all, headings)}
+</main>
+</div>
+<div id="lb" role="dialog" aria-label="Enlarged figure"><img alt=""></div>
+<script>${JS}</script>
+</body>
+</html>
+`;
+}
+
+// ═════════════════════════════ write both ═════════════════════════════
+fs.writeFileSync(`${BASE}.html`, buildHtml());
+console.log(`wrote ${BASE}.html (${(fs.statSync(`${BASE}.html`).size / 1024).toFixed(0)} KB)`);
+Packer.toBuffer(doc).then((buf) => {
+  fs.writeFileSync(`${BASE}.docx`, buf);
+  console.log(`wrote ${BASE}.docx (${(buf.length / 1024).toFixed(0)} KB)`);
+});

@@ -272,10 +272,16 @@ plan.md                 design document: problem, sources, features, architectur
 
 ## Report
 
-`report/NEPSE_BigData_Project_Report.docx` — the project report (problem, data sources, features,
-storage design, component choice, block diagram, implementation, results, demo plan). Fill in the
-yellow placeholders on the title page. To regenerate it after edits to `report/build.js`:
-`cd report && npm install docx@9.5.1 && node build.js NEPSE_BigData_Project_Report.docx`.
+The project report (problem, data sources, features, storage design, component choice, block
+diagram, implementation, results, demo plan) in two identical forms:
+
+- `report/NEPSE_BigData_Project_Report.docx` — Word document (27 pages)
+- `report/NEPSE_BigData_Project_Report.html` — single self-contained page (open in any browser; sidebar
+  navigation, click a figure to enlarge, prints like the Word version)
+
+Both are generated from the same content in `report/build.js`; only the teacher's name and the
+submission date are left as yellow placeholders. Regenerate both after editing:
+`cd report && npm install docx@9.5.1 && node build.js`.
 
 ## Troubleshooting
 - **Port already in use:** change the left side of the port mapping in `docker-compose.yml`.
