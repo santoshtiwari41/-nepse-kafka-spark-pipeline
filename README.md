@@ -270,6 +270,13 @@ data/                   sample (in git), reference (in git), historical + record
 plan.md                 design document: problem, sources, features, architecture
 ```
 
+## Report
+
+`report/NEPSE_BigData_Project_Report.docx` — the project report (problem, data sources, features,
+storage design, component choice, block diagram, implementation, results, demo plan). Fill in the
+yellow placeholders on the title page. To regenerate it after edits to `report/build.js`:
+`cd report && npm install docx@9.5.1 && node build.js NEPSE_BigData_Project_Report.docx`.
+
 ## Troubleshooting
 - **Port already in use:** change the left side of the port mapping in `docker-compose.yml`.
 - **NameNode stuck in safe mode:** `docker exec namenode hdfs dfsadmin -safemode leave`.

@@ -228,10 +228,11 @@ project-demo/
 - [ ] Rehearse the demo **fully offline** (Wi-Fi off) at least twice — *to do by the team*
 
 ### Phase 7 — Report (parallel, finalize after demo)
-- [ ] Problem definition, sources, features (part **a**)
-- [ ] Storage design, component choice and comparison, detailed block diagram (part **b**)
-- [ ] Screenshots, results, limitations, future work
-- [ ] Code + implementation guidelines (submitted after the demo, as instructed)
+- [x] Problem definition, sources, features (part **a**) — `report/NEPSE_BigData_Project_Report.docx`
+- [x] Storage design, component choice and comparison, detailed block diagram (part **b**)
+- [x] Screenshots, results, limitations, future work
+- [x] Code + implementation guidelines (README.md; submitted after the demo, as instructed)
+- [ ] Fill in the highlighted title-page placeholders (college, names, roll numbers, teacher, date) — *team*
 
 ---
 
