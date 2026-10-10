@@ -58,7 +58,7 @@ const titlePage = [{
   tools: "Apache Kafka · Apache Spark (Structured Streaming, SQL, MLlib) · Hadoop HDFS",
   course: "Submitted for the course Big Data Technology",
   by: ["Santosh Tiwari (082MSDSA024)", "Arbind Sah (082MSDSA006)"],
-  to: "[Teacher's Name]",
+  to: "Basanta Joshi",
   date: "[Submission date]",
 }];
 
@@ -689,19 +689,6 @@ const CSS = `
         --code-inline:#eef1f4; --paper:#ffffff; --desk:#e9ecf1; --mark:#fff176; --mark-ink:#1a1a1a;
         --side:#f7f8fa; --side-line:#d9dde3; --side-ink:#33393f; --side-hover:#e3ebf5; --h3:#404040;
         --soft-ink:#333333; --img-line:#e3e5e8; --link:#1f63a8; --shadow:rgba(0,0,0,.08); --overlay:rgba(15,18,24,.86); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-        --ink:#e4e8ee; --muted:#a3abb6; --accent:#8fb9e6; --line:#4a525c; --head:#22344b; --code:#1c2127;
-        --code-inline:#252b33; --paper:#161a1f; --desk:#0e1115; --mark:#f2d64b; --mark-ink:#111111;
-        --side:#12161b; --side-line:#2a3038; --side-ink:#c9d0d8; --side-hover:#1f2c3c; --h3:#c4cad2;
-        --soft-ink:#c9d0d8; --img-line:#2a3038; --link:#8cc0ff; --shadow:rgba(0,0,0,.45); --overlay:rgba(0,0,0,.9);
-        color-scheme: dark; } }
-:root[data-theme="dark"] {
-        --ink:#e4e8ee; --muted:#a3abb6; --accent:#8fb9e6; --line:#4a525c; --head:#22344b; --code:#1c2127;
-        --code-inline:#252b33; --paper:#161a1f; --desk:#0e1115; --mark:#f2d64b; --mark-ink:#111111;
-        --side:#12161b; --side-line:#2a3038; --side-ink:#c9d0d8; --side-hover:#1f2c3c; --h3:#c4cad2;
-        --soft-ink:#c9d0d8; --img-line:#2a3038; --link:#8cc0ff; --shadow:rgba(0,0,0,.45); --overlay:rgba(0,0,0,.9);
-        color-scheme: dark; }
-* { box-sizing: border-box; }
 html { scroll-padding-top: 16px; }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 body { margin: 0; background: var(--desk); color: var(--ink); text-rendering: optimizeLegibility;
