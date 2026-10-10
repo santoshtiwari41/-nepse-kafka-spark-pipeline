@@ -210,10 +210,10 @@ project-demo/
 - [x] Verify with Spark SQL queries (`batch_queries.py`, 9 analytical queries)
 
 ### Phase 4 — Spark Streaming Layer (Day 8–11)
-- [ ] `stream_processor.py`: read Kafka, parse, apply watermark, 1-min/5-min windows
-- [ ] VWAP, top gainers/losers, sector turnover
-- [ ] Alerts: volume spike (join with batch 20-day avg), price jump, circuit hit → `nepse.alerts` + HDFS
-- [ ] Checkpointing, and a test of restart recovery
+- [x] `stream_processor.py`: read Kafka, parse, watermark, 1-min event-time windows (5-min candles = dashboard resample)
+- [x] VWAP, per-symbol live state → `nepse.analytics` (gainers/losers computed from it), sector turnover per minute
+- [x] Alerts: volume spike (stream-static join with batch 20-day avg), big move from open, circuit hit → `nepse.alerts` + HDFS
+- [x] Checkpointing + restart recovery test: stream killed mid-replay → 15,142 / 15,142 ticks in HDFS, 0 lost, 0 duplicated
 
 ### Phase 5 — Dashboard (Day 11–13)
 - [ ] Mode badge, live ticker, gainers/losers, alerts feed (auto-refresh)

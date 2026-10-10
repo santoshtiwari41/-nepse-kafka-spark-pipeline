@@ -124,6 +124,39 @@ ordinary shares only (no debentures, mutual funds).
 volatility, 52-week high/low, 1w/1m/3m/1y returns, volume ratio vs prior 20-day average,
 golden/death cross, trend (UPTREND/DOWNTREND/SIDEWAYS), RSI signal (OVERSOLD/OVERBOUGHT).
 
+## Speed layer (Spark Structured Streaming)
+
+```bash
+./scripts/stream.sh start      # start the streaming job in the background (resumes from checkpoint)
+./scripts/stream.sh status     # running? → Spark UI http://localhost:4040/StreamingQuery/
+./scripts/stream.sh logs       # follow the log (alerts per micro-batch)
+./scripts/stream.sh stop       # graceful stop
+./scripts/stream.sh reset      # forget checkpoints + streaming outputs (batch data kept)
+
+# feed it:  .venv/bin/python ingestion/replay_producer.py --loop     (or live_producer.py)
+./scripts/spark_submit.sh stream_report.py --symbol NABIL   # what the stream has written to HDFS
+```
+
+| Query | Output | How |
+|-------|--------|-----|
+| `ticks` | HDFS `bronze/ticks` | raw ticks, exactly-once file sink, partitioned by trade_date |
+| `candles_1m` | HDFS `gold/candles_1m` | 1-min event-time windows, 1-min watermark: OHLC, volume, VWAP, trades |
+| `sector_flow` | HDFS `gold/sector_flow_1m` | turnover/volume/trades per sector per minute (equities) |
+| `live_snapshot` | Kafka `nepse.analytics` | latest state per symbol per day (stateful aggregation, update mode) |
+| `alerts` | Kafka `nepse.alerts` + HDFS `gold/alerts` | UPPER/LOWER_CIRCUIT (±9.5 %), VOLUME_SPIKE (≥ 3× 20-day avg), BIG_MOVE (≥ 5 % from open); de-duplicated per symbol/type within the watermark |
+
+Ticks are joined (stream-static) with `silver/companies` (sector) and `gold/volume_baseline`
+(normal volume) from the batch layer — restart the stream after re-running the batch layer to
+pick up new reference data.
+
+Notes
+- A 1-minute candle is written once the watermark passes its end, i.e. when newer ticks
+  arrive — so the last minute of a replay appears when the next replay (`--loop`) starts.
+- Each Spark app may use at most 2 of the worker's 4 cores (`spark.cores.max`), so the
+  stream and a batch job can run at the same time.
+- Fault tolerance: stopping the stream mid-session and starting it again loses and duplicates
+  nothing (checkpointed Kafka offsets + exactly-once file sink). Alerts use `foreachBatch` → at-least-once.
+
 ## Running a Spark job
 
 Jobs live in `spark/jobs/` (mounted at `/opt/spark-apps`); `data/` is mounted at `/opt/data`.
