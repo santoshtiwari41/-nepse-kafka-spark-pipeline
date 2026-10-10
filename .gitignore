@@ -25,3 +25,6 @@ logs/
 # Report build dependencies
 report/node_modules/
 report/package-lock.json
+
+# Local demo notes (not published)
+demo-guide/
