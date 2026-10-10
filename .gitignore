@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment / secrets
+.env
+
+# Runtime data (large / generated)
+data/historical/
+data/recordings/
+checkpoints/
+spark-warehouse/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
