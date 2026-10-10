@@ -17,21 +17,21 @@ History CSV ──bulk load──▶ HDFS bronze ─▶ Spark batch (SQL, MLlib)
 ## Requirements
 - Linux/macOS with Docker + Docker Compose v2 (Windows: WSL2)
 - 8 GB RAM or more (the stack uses ~2–3 GB while streaming), ~6 GB disk for images
-- Python 3.10+ on the host (data collection and producers)
+- Nothing else: every part runs in Docker, including the Python data-collection and producer
+  scripts (no local Python or virtual environment needed)
 - Internet **only for the first-time setup** — the demo itself runs fully offline
 
 ## First-time setup (once, online)
 
 ```bash
 git clone <repo> nepse && cd nepse
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-./scripts/start.sh            # pulls/builds images (~10 min first time), starts everything
+./scripts/start.sh            # pulls/builds all images (~10 min first time), starts everything
 ./scripts/verify.sh           # health check + Spark ↔ Kafka ↔ HDFS smoke test → "SMOKE TEST PASSED"
 
 # full history (optional — without it everything uses the committed 42-stock sample)
-.venv/bin/python ingestion/fetch_companies.py
-.venv/bin/python ingestion/fetch_history.py
+./scripts/ingest.sh fetch_companies
+./scripts/ingest.sh fetch_history
 
 ./scripts/run_batch.sh        # history → HDFS bronze/silver/gold + MLlib model (~5 min)
 ```
@@ -39,7 +39,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 On every trading day before the demo, record the live session (market ~11:00–15:00 NPT):
 
 ```bash
-.venv/bin/python ingestion/live_producer.py --no-kafka     # → data/recordings/<date>.jsonl
+./scripts/ingest.sh live_producer --no-kafka     # → data/recordings/<date>.jsonl
 ```
 
 ## Demo day
@@ -60,7 +60,7 @@ Manual equivalent:
 ```bash
 ./scripts/start.sh
 ./scripts/stream.sh start
-.venv/bin/python ingestion/replay_producer.py --loop      # or live_producer.py when the market is open
+./scripts/ingest.sh replay_producer --loop      # or live_producer when the market is open
 # open http://localhost:8501
 ```
 
@@ -94,14 +94,17 @@ Manual equivalent:
 /nepse/checkpoints   Spark streaming checkpoints
 ```
 
-## Data collection (host side)
+## Data collection (in Docker)
+
+The Python scripts in `ingestion/` run in the `nepse-ingestion` container (Python 3.12, dependencies
+installed with uv from `requirements.txt`). `./scripts/ingest.sh <script> [args]` runs one of them
+on the stack's Docker network, as your own user so files in `data/` stay yours. The image is built
+automatically the first time.
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-
-.venv/bin/python ingestion/fetch_companies.py   # 649 companies + sector → data/reference/
-.venv/bin/python ingestion/fetch_history.py     # ~370 companies + NEPSE index → data/historical/
-.venv/bin/python ingestion/build_sample.py      # small offline dataset → data/sample/ (committed)
+./scripts/ingest.sh fetch_companies   # 649 companies + sector → data/reference/
+./scripts/ingest.sh fetch_history     # ~370 companies + NEPSE index → data/historical/
+./scripts/ingest.sh build_sample      # small offline dataset → data/sample/ (committed)
 ```
 
 | Folder | Content | In git? |
@@ -116,9 +119,9 @@ All price CSVs share the columns `date,symbol,open,high,low,close,volume,turnove
 ### Live producer (LIVE mode)
 
 ```bash
-.venv/bin/python ingestion/live_producer.py              # waits for market open, streams to nepse.ticks
-.venv/bin/python ingestion/live_producer.py --no-kafka   # just record the session to data/recordings/
-.venv/bin/python ingestion/live_producer.py --once --force   # single poll even when closed (testing)
+./scripts/ingest.sh live_producer                 # waits for market open, streams to nepse.ticks
+./scripts/ingest.sh live_producer --no-kafka      # just record the session to data/recordings/
+./scripts/ingest.sh live_producer --once --force  # single poll even when closed (testing)
 ```
 
 Each Kafka message on `nepse.ticks` (key = symbol):
@@ -135,11 +138,11 @@ Each Kafka message on `nepse.ticks` (key = symbol):
 ### Replay producer (REPLAY mode — works when the market is closed)
 
 ```bash
-.venv/bin/python ingestion/replay_producer.py --list                      # what can be replayed
-.venv/bin/python ingestion/replay_producer.py                             # latest trading day, 60x (4 h → 4 min)
-.venv/bin/python ingestion/replay_producer.py --date 2026-10-09 --speed 120 --loop
-.venv/bin/python ingestion/replay_producer.py --source recording          # latest recorded live session
-.venv/bin/python ingestion/replay_producer.py --symbols NABIL --dry-run   # print instead of sending
+./scripts/ingest.sh replay_producer --list                      # what can be replayed
+./scripts/ingest.sh replay_producer                             # latest trading day, 60x (4 h → 4 min)
+./scripts/ingest.sh replay_producer --date 2026-10-09 --speed 120 --loop
+./scripts/ingest.sh replay_producer --source recording          # latest recorded live session
+./scripts/ingest.sh replay_producer --symbols NABIL --dry-run   # print instead of sending
 ```
 
 - `--source historical` (default) simulates intraday trades from each stock's daily OHLCV: the
@@ -184,7 +187,7 @@ golden/death cross, trend (UPTREND/DOWNTREND/SIDEWAYS), RSI signal (OVERSOLD/OVE
 ./scripts/stream.sh stop       # graceful stop
 ./scripts/stream.sh reset      # forget checkpoints + streaming outputs (batch data kept)
 
-# feed it:  .venv/bin/python ingestion/replay_producer.py --loop     (or live_producer.py)
+# feed it:  ./scripts/ingest.sh replay_producer --loop     (or live_producer)
 ./scripts/spark_submit.sh stream_report.py --symbol NABIL   # what the stream has written to HDFS
 ```
 
@@ -260,12 +263,12 @@ docker exec spark-master /opt/spark/bin/spark-submit /opt/spark-apps/<job>.py
 ```
 docker-compose.yml      all services (Kafka, Kafka UI, HDFS, Spark, dashboard)
 config/hadoop.env       HDFS configuration
-ingestion/              host-side Python: fetch_*.py (data collection), live_producer.py, replay_producer.py
+ingestion/              Python (runs in Docker): fetch_*.py, live_producer.py, replay_producer.py, Dockerfile
 spark/Dockerfile        Spark image with the Kafka connector baked in (works offline)
 spark/conf/             spark-defaults.conf, log4j2.properties
 spark/jobs/             PySpark jobs: batch_*.py, ml_predict.py, stream_processor.py, stream_report.py
 dashboard/              Streamlit app (app.py = UI, data.py = Kafka + WebHDFS access)
-scripts/                start / stop / init / verify / run_batch / stream / spark_submit / demo
+scripts/                start / stop / init / verify / run_batch / stream / spark_submit / ingest / demo
 data/                   sample (in git), reference (in git), historical + recordings (downloaded/recorded)
 plan.md                 design document: problem, sources, features, architecture
 ```

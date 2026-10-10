@@ -141,6 +141,22 @@ services:
     depends_on:
       - spark-master
 
+  # ───────────────────────── Data collection / producers ─────────────────────────
+  # Not a long-running service: run a script with  ./scripts/ingest.sh <script> [args]
+  producer:
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
+    image: nepse-ingestion:1.0
+    profiles: ["tools"]
+    networks: [nepse-net]
+    working_dir: /app
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+    volumes:
+      - ./ingestion:/app/ingestion
+      - ./data:/app/data
+
   # ───────────────────────── Visualization ─────────────────────────
   dashboard:
     build: ./dashboard

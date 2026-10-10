@@ -20,11 +20,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-PY=.venv/bin/python
-mkdir -p logs
-PRODUCER_PID=""
+PRODUCER=nepse-producer          # background producer container
 cleanup() {
-  [ -n "$PRODUCER_PID" ] && kill "$PRODUCER_PID" 2>/dev/null && echo "producer stopped"
+  if docker ps -aq --filter "name=^${PRODUCER}$" | grep -q .; then
+    docker rm -f "$PRODUCER" > /dev/null && echo "producer stopped"
+  fi
 }
 trap cleanup EXIT
 
@@ -65,19 +65,22 @@ step "4/6  Feed the stream: LIVE if NEPSE is open, otherwise REPLAY"
 MODE=REPLAY
 if ! $FORCE_REPLAY; then
   say "Asking the NEPSE API whether the market is open…"
-  OPEN=$(timeout 30 $PY -c "import sys; sys.path.insert(0, 'ingestion')
-from live_producer import NepseApi; print(NepseApi().market_open())" 2>/dev/null || echo "unreachable")
+  OPEN=$(timeout 60 docker compose run --rm -T producer python -c "import sys; sys.path.insert(0, 'ingestion')
+from live_producer import NepseApi; print(NepseApi().market_open())" < /dev/null 2>/dev/null | tail -1 || true)
+  OPEN=${OPEN:-unreachable}
   say "market open: $OPEN"
   [ "$OPEN" = "True" ] && MODE=LIVE
 fi
+cleanup                                   # remove a producer left over from an earlier run
+export INGEST_DOCKER_OPTS="-d --name $PRODUCER"
 if [ "$MODE" = LIVE ]; then
-  $PY -u ingestion/live_producer.py > logs/producer.log 2>&1 &
+  ./scripts/ingest.sh live_producer < /dev/null > /dev/null
 else
-  $PY -u ingestion/replay_producer.py --speed "$SPEED" --loop ${DATE:+--date "$DATE"} > logs/producer.log 2>&1 &
+  ./scripts/ingest.sh replay_producer --speed "$SPEED" --loop ${DATE:+--date "$DATE"} < /dev/null > /dev/null
 fi
-PRODUCER_PID=$!
-sleep 4
-say "$MODE producer running (log: logs/producer.log)" "$(head -1 logs/producer.log)" "" \
+for _ in $(seq 30); do docker logs "$PRODUCER" 2>&1 | grep -q . && break; sleep 1; done   # first status line
+say "$MODE producer running in container $PRODUCER (log: docker logs -f $PRODUCER)" \
+    "$(docker logs "$PRODUCER" 2>&1 | head -1)" "" \
     "Show: Kafka UI → Topics → nepse.ticks → Messages (ticks arriving)" \
     "      Dashboard → 'Live market' (badge = $MODE, movers, sector map, alerts, intraday candles)"
 pause

@@ -1,4 +1,4 @@
-# Host-side Python (data collection + producers). Python 3.10+
+# Python dependencies of the ingestion container (ingestion/Dockerfile installs them with uv)
 requests==2.34.2
 beautifulsoup4==4.15.0
 lxml==6.1.3
