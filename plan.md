@@ -204,9 +204,10 @@ project-demo/
 - [x] Verify messages in Kafka-UI (full day = 15,142 ticks / 327 symbols across 3 partitions)
 
 ### Phase 3 — Spark Batch Layer (Day 5–8)
-- [ ] `batch_load_history.py`: CSV → HDFS bronze → cleaned silver (partitioned by date)
-- [ ] `batch_indicators.py`: SMA20/50, EMA, RSI14, 52W high/low, volatility, sector aggregates, 20-day avg volume → gold
-- [ ] Verify with Spark SQL queries
+- [x] `batch_load_history.py`: CSV → HDFS bronze → cleaned silver (partitioned by **year**: daily partitions would create thousands of tiny files, the HDFS "small files problem")
+- [x] Data cleaning: invalid rows dropped, OHLC repaired (40,552 rows), bonus/right-share gaps detected (731) and prices back-adjusted
+- [x] `batch_indicators.py`: SMA 20/50/200, RSI 14, Bollinger bands, volatility, 52W high/low, returns, volume ratio, golden/death cross, sector + market aggregates, 20-day avg volume baseline → gold
+- [x] Verify with Spark SQL queries (`batch_queries.py`, 9 analytical queries)
 
 ### Phase 4 — Spark Streaming Layer (Day 8–11)
 - [ ] `stream_processor.py`: read Kafka, parse, apply watermark, 1-min/5-min windows

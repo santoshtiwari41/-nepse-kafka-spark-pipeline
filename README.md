@@ -100,6 +100,30 @@ Each Kafka message on `nepse.ticks` (key = symbol):
   stream every time; use `--keep-time` to keep the original timestamps.
 - Uses `data/historical/` if downloaded, otherwise falls back to the committed `data/sample/`.
 
+## Batch layer (Spark)
+
+```bash
+./scripts/run_batch.sh                 # load → clean → indicators → SQL showcase (~3.5 min, full history)
+./scripts/run_batch.sh --source sample # same, from the offline sample (faster)
+./scripts/spark_submit.sh batch_queries.py --only oversold   # one Spark SQL query
+```
+
+| Job | Reads | Writes |
+|-----|-------|--------|
+| `batch_load_history.py` | CSVs in `data/` | `bronze/{prices,index,companies}` (raw + lineage), `silver/{prices,index,companies}`, `gold/data_quality` |
+| `batch_indicators.py` | silver | `gold/indicators` (per symbol/day), `latest_snapshot`, `volume_baseline`, `sector_daily`, `market_daily` |
+| `batch_queries.py` | silver + gold | prints answers: top gainers, sector money flow, oversold, golden crosses, volume spikes, volatility, NEPSE yearly returns, bonus-share adjustments |
+
+**Cleaning rules (silver):** drop rows with non-positive prices or zero volume; drop duplicate
+(symbol, date); widen high/low to include open/close; flag an opening gap below −10.5 %
+(beyond NEPSE's ±10 % circuit) as a bonus/right-share adjustment and back-adjust earlier prices
+into `adj_*` columns, so indicators don't see fake crashes. Sector/market statistics use
+ordinary shares only (no debentures, mutual funds).
+
+**Indicators (gold):** SMA 20/50/200, RSI 14, Bollinger bands (20, 2σ), 20-day annualised
+volatility, 52-week high/low, 1w/1m/3m/1y returns, volume ratio vs prior 20-day average,
+golden/death cross, trend (UPTREND/DOWNTREND/SIDEWAYS), RSI signal (OVERSOLD/OVERBOUGHT).
+
 ## Running a Spark job
 
 Jobs live in `spark/jobs/` (mounted at `/opt/spark-apps`); `data/` is mounted at `/opt/data`.
@@ -124,4 +148,5 @@ data/                  sample, historical, recordings (host side)
 - **Port already in use:** change the left side of the port mapping in `docker-compose.yml`.
 - **NameNode stuck in safe mode:** `docker exec namenode hdfs dfsadmin -safemode leave`.
 - **Service unhealthy:** `docker logs <container>`.
+- **Edited `spark/conf/*` or `config/hadoop.env`:** restart the containers (`docker compose restart spark-master spark-worker`) — single-file mounts don't pick up edits made by tools that replace the file.
 - **Start from scratch:** `./scripts/stop.sh --clean && ./scripts/start.sh`.
