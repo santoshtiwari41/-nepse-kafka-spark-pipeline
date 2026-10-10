@@ -82,6 +82,24 @@ Each Kafka message on `nepse.ticks` (key = symbol):
 **Record sessions before the demo:** run the live producer on as many trading days as possible
 (market ~11:00–15:00 NPT). These recordings make REPLAY mode look exactly like a live market.
 
+### Replay producer (REPLAY mode — works when the market is closed)
+
+```bash
+.venv/bin/python ingestion/replay_producer.py --list                      # what can be replayed
+.venv/bin/python ingestion/replay_producer.py                             # latest trading day, 60x (4 h → 4 min)
+.venv/bin/python ingestion/replay_producer.py --date 2026-10-09 --speed 120 --loop
+.venv/bin/python ingestion/replay_producer.py --source recording          # latest recorded live session
+.venv/bin/python ingestion/replay_producer.py --symbols NABIL --dry-run   # print instead of sending
+```
+
+- `--source historical` (default) simulates intraday trades from each stock's daily OHLCV: the
+  price path starts at the open, touches the day's high and low, and ends exactly at the close,
+  with the day's volume split across trades (seeded → the same day always replays identically).
+- `--source recording` replays real ticks captured by `live_producer.py`.
+- Timestamps are shifted to *now* and compressed by `--speed`, so Spark sees a fresh, live-looking
+  stream every time; use `--keep-time` to keep the original timestamps.
+- Uses `data/historical/` if downloaded, otherwise falls back to the committed `data/sample/`.
+
 ## Running a Spark job
 
 Jobs live in `spark/jobs/` (mounted at `/opt/spark-apps`); `data/` is mounted at `/opt/data`.

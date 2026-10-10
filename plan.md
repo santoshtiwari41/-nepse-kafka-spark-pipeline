@@ -199,9 +199,9 @@ project-demo/
 - [ ] **Record 3–5 real live trading sessions during market hours** (needed for a realistic replay)
 
 ### Phase 2 — Kafka Ingestion (Day 4–5)
-- [ ] Topics: `nepse.ticks` (partitioned by symbol), `nepse.alerts`, `nepse.analytics`
-- [ ] `replay_producer.py` with `--source recording|historical --date --speed 60x`
-- [ ] Verify messages in Kafka-UI
+- [x] Topics: `nepse.ticks` (partitioned by symbol), `nepse.alerts`, `nepse.analytics`
+- [x] `replay_producer.py` with `--source recording|historical --date --speed 60x` (+ `--loop`, `--dry-run`, `--list`)
+- [x] Verify messages in Kafka-UI (full day = 15,142 ticks / 327 symbols across 3 partitions)
 
 ### Phase 3 — Spark Batch Layer (Day 5–8)
 - [ ] `batch_load_history.py`: CSV → HDFS bronze → cleaned silver (partitioned by date)
