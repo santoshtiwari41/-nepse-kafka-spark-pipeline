@@ -59,7 +59,7 @@ const titlePage = [{
   course: "Submitted for the course Big Data Technology",
   by: ["Santosh Tiwari (082MSDSA024)", "Arbind Sah (082MSDSA006)"],
   to: "Basanta Joshi",
-  date: "[Submission date]",
+  date: "11 October 2026",
 }];
 
 const abstract = [
