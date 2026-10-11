@@ -1,30 +1,40 @@
-// Builds the project report as Word (.docx) AND a self-contained HTML page from ONE content
-// definition, so both are always identical:
-//   cd report && npm install docx@9.5.1 && node build.js      → NEPSE_BigData_Project_Report.{docx,html}
+// Builds the project report as Word (.docx), a self-contained HTML page AND a print-ready A4 PDF from
+// ONE content definition, so all three are always identical:
+//   cd report && npm install docx@9.5.1 pdf-lib@1.17.1 && node build.js
+//                                              → NEPSE_BigData_Project_Report.{docx,html,pdf}
+// The PDF is printed by headless Google Chrome (set CHROME=/path if it is not on PATH) and needs
+// pdftotext (poppler-utils). It is built in two passes: pass 1 finds the page of every heading and
+// caption, pass 2 prints the table of contents and lists with those page numbers. The same numbers are
+// cached in the Word file's table of contents, so it is filled in every viewer (Word refreshes it).
 // Figures live in figures/ (architecture.png is rendered from figures/diagram.html).
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell,
   WidthType, ShadingType, BorderStyle, ImageRun, TableOfContents, PageBreak, Footer, PageNumber,
-  LevelFormat, VerticalAlign, PageOrientation,
+  LevelFormat, VerticalAlign, PageOrientation, NumberFormat, StyleLevel,
 } = require("docx");
 
 const BASE = process.argv[2] || path.join(__dirname, "NEPSE_BigData_Project_Report");
 const IMG = (f) => fs.readFileSync(path.join(__dirname, "figures", f));
 
 // ───────────── page & style constants (Word) ─────────────
-const PAGE_W = 11906, PAGE_H = 16838, MARGIN = 1440;      // A4, 1" margins
-const TEXT_W = PAGE_W - 2 * MARGIN;                         // 9026 DXA ≈ 6.27"
-const PX_W = 600;                                           // full-width image, px at 96 dpi
-const FONT = "Calibri", MONO = "Consolas";
-const ACCENT = "1F4E79", HEADER_FILL = "DCE6F1", CODE_FILL = "F2F2F2";
+// Standard academic layout: A4, Times New Roman 12 pt, 1.5 line spacing, 1.5" binding margin, 1" elsewhere.
+const PAGE_W = 11906, PAGE_H = 16838, MARGIN = 1440, MARGIN_L = 2160;
+const TEXT_W = PAGE_W - MARGIN_L - MARGIN;                  // 8306 DXA ≈ 5.77"
+const PX_W = 550;                                           // full-width image, px at 96 dpi
+const FONT = "Times New Roman", MONO = "Consolas";
+const ACCENT = "000000", HEADER_FILL = "DCE6F1", CODE_FILL = "F2F2F2";
 
 // ───────────── content helpers → IR nodes (rendered to Word and HTML below) ─────────────
 // inline markup in text: **bold**, `code`
 const P = (text, opts = {}) => ({ t: "p", text, center: !!opts.center });
 const H1 = (text) => ({ t: "h1", text, pageBreak: true });
 const H1keep = (text) => ({ t: "h1", text, pageBreak: false });
+const FM = (text) => ({ t: "h1", text, pageBreak: false, fm: true });     // centred front-matter title
+const FMtitle = (text) => ({ t: "fmtitle", text });                       // like FM, but not in the contents
 const H2 = (text) => ({ t: "h2", text });
 const H3 = (text) => ({ t: "h3", text });
 const bullet = (text, level = 0) => ({ t: "bullet", text, level });
@@ -63,13 +73,36 @@ const titlePage = [{
 }];
 
 const abstract = [
-  H1keep("Abstract"),
+  FM("Abstract"),
   P("Retail investors in Nepal follow the Nepal Stock Exchange (NEPSE) through several separate websites that show current prices but offer no combined view of real-time activity and long-term history. This project builds a big data system that collects NEPSE market data, processes it both as a live stream and as a 31-year historical batch, stores it in a Hadoop data lake and presents the results on an interactive dashboard."),
   P("The system uses **Apache Kafka** for ingestion and **Apache Spark** for processing, with **HDFS** (Parquet files) as the storage layer, following a Lambda-style architecture. Live prices come from the official NEPSE API; when the market is closed, a replay producer streams any past trading day through the same pipeline, so the demonstration never depends on market hours. The batch layer cleans 514,018 historical price records for 372 companies (repairing 40,552 inconsistent rows and correcting 731 bonus/right-share price adjustments) and computes technical indicators such as moving averages, RSI, Bollinger bands and 52-week ranges. The streaming layer produces 1-minute candles, sector money flow, a live market snapshot and alerts for circuit hits, volume spikes and large price moves. A fault-tolerance test in which the streaming job was killed mid-session showed no data loss and no duplication (15,142 of 15,142 ticks stored exactly once). As a bonus, a Spark MLlib random forest predicts next-day price direction; its honest result (55.8 % accuracy against a 55.9 % baseline) illustrates how close daily price moves are to random."),
   P("**Keywords:** big data, Apache Kafka, Apache Spark, Structured Streaming, HDFS, Parquet, Lambda architecture, NEPSE, stock market analytics."),
 ];
 
-const toc = [H1keep("Table of Contents"), { t: "toc" }];
+const toc = [FMtitle("Table of Contents"), { t: "toc" }];
+
+const lists = [
+  PAGEBREAK, FM("List of Figures"), { t: "lof" },
+  PAGEBREAK, FM("List of Tables"), { t: "lot" },
+  PAGEBREAK, FM("List of Abbreviations"),
+  table(["Abbreviation", "Meaning"], [
+    ["API", "Application Programming Interface"],
+    ["AUC", "Area Under the (ROC) Curve"],
+    ["CSV", "Comma-Separated Values"],
+    ["HDFS", "Hadoop Distributed File System"],
+    ["JSON / JSONL", "JavaScript Object Notation / JSON Lines (one JSON object per line)"],
+    ["ML / MLlib", "Machine Learning / Spark's Machine Learning Library"],
+    ["NEPSE", "Nepal Stock Exchange"],
+    ["NPT", "Nepal Time (UTC+05:45)"],
+    ["OHLC / OHLCV", "Open, High, Low, Close (and Volume) prices of a period"],
+    ["RSI", "Relative Strength Index"],
+    ["SMA", "Simple Moving Average"],
+    ["SQL", "Structured Query Language"],
+    ["UI", "User Interface"],
+    ["VWAP", "Volume-Weighted Average Price"],
+    ["WebHDFS", "HTTP REST interface to HDFS"],
+  ], [28, 72]),
+];
 
 const ch1 = [
   H1("1. Introduction"),
@@ -448,8 +481,10 @@ const appendix = [
     "spark/jobs/             batch_load_history.py, batch_indicators.py, batch_queries.py,",
     "                        ml_predict.py, stream_processor.py, stream_report.py",
     "dashboard/              Streamlit app (app.py, data.py)",
-    "scripts/                start, stop, init, verify, run_batch, stream, spark_submit, ingest, demo",
-    "data/                   sample/ (offline dataset), reference/, historical/, recordings/",
+    "scripts/                start, stop, init, verify, run_batch, stream,",
+    "                        spark_submit, ingest, demo",
+    "data/                   sample/ (offline dataset), reference/,",
+    "                        historical/, recordings/",
     "plan.md, README.md      design document and setup guide",
   ]),
   H1("Appendix C: Division of Work"),
@@ -465,8 +500,9 @@ const appendix = [
 ];
 
 // ───────────── document order ─────────────
-const partA = captionsAbove([...titlePage, PAGEBREAK, ...abstract, PAGEBREAK, ...toc, ...ch1, ...ch2, ...ch3, ...ch4, ...ch5]);
-const partB = ch5diagram;                                  // landscape page in Word
+const front = captionsAbove([...titlePage, PAGEBREAK, ...abstract, PAGEBREAK, ...toc, ...lists]);   // roman pages
+const partA = captionsAbove([...ch1, ...ch2, ...ch3, ...ch4, ...ch5]);                      // page 1 onwards
+const partB = ch5diagram;                                  // landscape page
 const partC = captionsAbove([...ch5b, ...ch6, ...ch7, ...ch8, ...ch9, ...ch10, ...refs, ...appendix]);
 const isPlaceholder = (t) => /^\[.*\]$/.test(t);
 
@@ -531,43 +567,51 @@ function docxTitle(n) {
 function docxNode(n) {
   switch (n.t) {
     case "title": return docxTitle(n);
-    case "p": return [new Paragraph({ children: runs(n.text), spacing: { after: 120, line: 276 },
+    case "p": return [new Paragraph({ children: runs(n.text), spacing: { after: 120, line: 360 },
       alignment: n.center ? AlignmentType.CENTER : AlignmentType.JUSTIFIED })];
-    case "h1": return [new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(n.text)], pageBreakBefore: n.pageBreak })];
+    case "h1": return [new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun(n.text)], pageBreakBefore: n.pageBreak,
+      alignment: n.fm ? AlignmentType.CENTER : undefined })];
+    case "fmtitle": return [new Paragraph({ alignment: AlignmentType.CENTER, keepNext: true, spacing: { before: 120, after: 240 },
+      children: [new TextRun({ text: n.text, bold: true, size: 32 })] })];
     case "h2": return [new Paragraph({ heading: HeadingLevel.HEADING_2, keepNext: true, children: [new TextRun(n.text)] })];
     case "h3": return [new Paragraph({ heading: HeadingLevel.HEADING_3, keepNext: true, children: [new TextRun(n.text)] })];
     case "bullet": return [new Paragraph({ numbering: { reference: "bullets", level: n.level }, children: runs(n.text),
-      spacing: { after: 60, line: 264 } })];
+      spacing: { after: 60, line: 312 } })];
     case "num": return [new Paragraph({ numbering: { reference: n.ref, level: 0 }, children: runs(n.text),
-      spacing: { after: 60, line: 264 } })];
+      spacing: { after: 60, line: 312 } })];
     case "code": return n.lines.map((l, i) => new Paragraph({
       children: [new TextRun({ text: l || " ", font: MONO, size: 18 })],
       shading: { type: ShadingType.CLEAR, color: "auto", fill: CODE_FILL },
       spacing: { before: i === 0 ? 60 : 0, after: i === n.lines.length - 1 ? 160 : 0, line: 240 },
       indent: { left: 120, right: 120 } }));
-    case "caption": return [new Paragraph({ alignment: AlignmentType.CENTER, keepNext: n.kind === "Table",
+    case "caption": return [new Paragraph({ style: `${n.kind}Caption`, alignment: AlignmentType.CENTER, keepNext: n.kind === "Table",
       spacing: n.kind === "Table" ? { before: 220, after: 80 } : { before: 60, after: 200 },
-      children: [new TextRun({ text: `${n.kind} ${n.n}: `, bold: true, size: 20, color: ACCENT }),
-                 new TextRun({ text: n.text, italics: true, size: 20 })] })];
+      children: [new TextRun({ text: `${n.kind} ${n.n}: `, bold: true, size: 22 }),
+                 new TextRun({ text: n.text, size: 22 })] })];
     case "table": return [docxTable(n)];
     case "img": return [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 120, after: 40 }, keepNext: true,
       children: [new ImageRun({ type: "png", data: IMG(n.file), transformation: { width: n.w, height: n.h },
         altText: { title: n.alt, description: n.alt, name: n.file } })] })];
     case "pagebreak": return [new Paragraph({ children: [new PageBreak()] })];
     case "spacer": return [new Paragraph({ spacing: { after: 120 }, children: [] })];
-    case "toc": return [
-      new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-2" }),
-      new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: "(If the table is empty, right-click it in Word and choose “Update Field”.)", italics: true, size: 18, color: "7F7F7F" })] })];
+    // Word fields; their entries and page numbers are filled in by fillDocxLists() after packing
+    case "toc": return [new TableOfContents("Table of Contents", { hyperlink: true, headingStyleRange: "1-2" })];
+    case "lof": return [new TableOfContents("List of Figures", { hyperlink: true, stylesWithLevels: [new StyleLevel("Figure Caption", 1)] })];
+    case "lot": return [new TableOfContents("List of Tables", { hyperlink: true, stylesWithLevels: [new StyleLevel("Table Caption", 1)] })];
     default: throw new Error(`unknown node ${n.t}`);
   }
 }
 const toDocx = (nodes) => nodes.flatMap(docxNode);
 
-const margin = { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN };
+const margin = { top: MARGIN, bottom: MARGIN, left: MARGIN_L, right: MARGIN };
 const portrait = { size: { width: PAGE_W, height: PAGE_H }, margin };
-const landscape = { size: { width: PAGE_W, height: PAGE_H, orientation: PageOrientation.LANDSCAPE }, margin };
+const landscape = { size: { width: PAGE_W, height: PAGE_H, orientation: PageOrientation.LANDSCAPE },
+  margin: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN } };
 const footer = () => new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER,
-  children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: "7F7F7F" })] })] });
+  children: [new TextRun({ children: [PageNumber.CURRENT], size: 22 })] })] });
+const noFooter = () => new Footer({ children: [new Paragraph({ children: [] })] });
+// a section always starts on a new page, so its first heading needs no extra page break
+const sectionStart = (nodes) => nodes.map((n, i) => (i === 0 && n.t === "h1" ? { ...n, pageBreak: false } : n));
 
 const doc = new Document({
   creator: "Santosh Tiwari, Arbind Sah",
@@ -576,14 +620,16 @@ const doc = new Document({
   features: { updateFields: true },
   styles: {
     default: {
-      document: { run: { font: FONT, size: 22 } },
-      heading1: { run: { font: FONT, size: 34, bold: true, color: ACCENT },
-        paragraph: { spacing: { before: 120, after: 240 }, keepNext: true, outlineLevel: 0 } },
-      heading2: { run: { font: FONT, size: 27, bold: true, color: ACCENT },
-        paragraph: { spacing: { before: 280, after: 120 }, keepNext: true, outlineLevel: 1 } },
-      heading3: { run: { font: FONT, size: 23, bold: true, color: "404040" },
-        paragraph: { spacing: { before: 200, after: 80 }, keepNext: true, outlineLevel: 2 } },
+      document: { run: { font: FONT, size: 24 } },
+      heading1: { run: { font: FONT, size: 32, bold: true, color: ACCENT },
+        paragraph: { spacing: { before: 120, after: 280 }, keepNext: true, outlineLevel: 0 } },
+      heading2: { run: { font: FONT, size: 28, bold: true, color: ACCENT },
+        paragraph: { spacing: { before: 300, after: 120 }, keepNext: true, outlineLevel: 1 } },
+      heading3: { run: { font: FONT, size: 24, bold: true, color: ACCENT },
+        paragraph: { spacing: { before: 220, after: 80 }, keepNext: true, outlineLevel: 2 } },
     },
+    paragraphStyles: ["Figure", "Table"].map((kind) => ({ id: `${kind}Caption`, name: `${kind} Caption`,
+      basedOn: "Normal", next: "Normal", quickFormat: true, paragraph: { alignment: AlignmentType.CENTER } })),
   },
   numbering: {
     config: [
@@ -598,9 +644,12 @@ const doc = new Document({
     ],
   },
   sections: [
-    { properties: { titlePage: true, page: portrait },
-      footers: { default: footer(), first: new Footer({ children: [new Paragraph({ children: [] })] }) },
-      children: toDocx(partA) },
+    // cover (counted as page i, not printed) and front matter: roman page numbers
+    { properties: { titlePage: true, page: { ...portrait, pageNumbers: { start: 1, formatType: NumberFormat.LOWER_ROMAN } } },
+      footers: { default: footer(), first: noFooter() }, children: toDocx(front) },
+    // chapters: arabic page numbers from 1
+    { properties: { page: { ...portrait, pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL } } },
+      footers: { default: footer() }, children: toDocx(sectionStart(partA)) },
     { properties: { page: landscape }, footers: { default: footer() }, children: toDocx(partB) },
     { properties: { page: portrait }, footers: { default: footer() }, children: toDocx(partC) },
   ],
@@ -621,7 +670,7 @@ function htmlTitle(n) {
   return `<section class="cover">
   <div class="inst"><div class="uni">${esc(uni)}</div><div>${esc(inst)}</div><div class="campus">${esc(campus)}</div></div>
   <div class="pre">${esc(n.pre)}</div>
-  <h1 class="title">${n.title.map(esc).join("<br>")}</h1>
+  <h1 class="title">${n.title.map(esc).join(" <br>")}</h1>
   <div class="tools">${esc(n.tools)}</div>
   <div class="course">${inline(n.course.replace("Big Data Technology", "**Big Data Technology**"))}</div>
   <div class="who"><div class="label">Submitted by</div>${n.by.map((b) => `<div>${esc(b)}</div>`).join("")}</div>
@@ -638,8 +687,16 @@ function htmlTable(n) {
 <tbody>${n.rows.map((r) => `<tr>${r.map((v, i) => cell("td", v, i)).join("")}</tr>`).join("\n")}</tbody></table></div>`;
 }
 
-function toHtml(nodes, headings) {
+const capId = (n) => `${n.kind.toLowerCase()}-${n.n}`;
+const markerTag = (id) => `QQ${id}QQ`;                     // invisible text that pass 1 finds with pdftotext
+
+// ctx: { headings, figures, tables } for the contents lists; print: { pages: {id: label} | null, markers }
+function toHtml(nodes, ctx, print = null) {
   const out = [];
+  const mk = (id) => (print && print.markers ? `<span class="mk">${markerTag(id)}</span>` : "");
+  const pg = (id) => (print ? `<span class="dots"></span><span class="pg">${esc((print.pages && print.pages[id]) || "000")}</span>` : "");
+  const entryList = (cls, items) => `<nav class="toc ${cls}"><ol>${items.map((it) =>
+    `<li class="${it.cls}"><a href="#${it.id}"><span class="t">${it.label}</span>${pg(it.id)}</a></li>`).join("")}</ol></nav>`;
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     if (n.t === "bullet" || n.t === "num") {            // group consecutive list items
@@ -654,21 +711,37 @@ function toHtml(nodes, headings) {
     switch (n.t) {
       case "title": out.push(htmlTitle(n)); break;
       case "p": out.push(`<p${n.center ? ' class="c"' : ""}>${inline(n.text)}</p>`); break;
-      case "h1": out.push(`<h1 id="${slug(n.text)}"${n.pageBreak ? ' class="chapter"' : ""}>${esc(n.text)}</h1>`); break;
-      case "h2": out.push(`<h2 id="${slug(n.text)}">${esc(n.text)}</h2>`); break;
+      case "h1": {
+        const cls = [n.pageBreak && "chapter", n.fm && "fm"].filter(Boolean).join(" ");
+        out.push(`<h1 id="${slug(n.text)}"${cls ? ` class="${cls}"` : ""}>${mk(slug(n.text))}${esc(n.text)}</h1>`); break;
+      }
+      case "fmtitle": out.push(`<h1 class="fm">${esc(n.text)}</h1>`); break;
+      case "h2": out.push(`<h2 id="${slug(n.text)}">${mk(slug(n.text))}${esc(n.text)}</h2>`); break;
       case "h3": out.push(`<h3>${esc(n.text)}</h3>`); break;
-      case "code": out.push(`<pre><code>${esc(n.lines.join("\n"))}</code></pre>`); break;
-      case "caption": out.push(`<p class="caption ${n.kind.toLowerCase()}"><b>${n.kind} ${n.n}:</b> <i>${esc(n.text)}</i></p>`); break;
+      case "code": {                                       // in print, shrink wide blocks to fit instead of wrapping
+        const longest = Math.max(...n.lines.map((l) => l.length));
+        const size = print ? Math.max(7, Math.min(9, Math.floor((PRINT_TEXT_PT - 18) / (longest * 0.6) * 10) / 10)) : 0;
+        out.push(`<pre${size ? ` style="font-size:${size}pt"` : ""}><code>${esc(n.lines.join("\n"))}</code></pre>`); break;
+      }
+      case "caption": out.push(`<p class="caption ${n.kind.toLowerCase()}" id="${capId(n)}">${mk(capId(n))}<b>${n.kind} ${n.n}:</b> <i>${esc(n.text)}</i></p>`); break;
       case "table": out.push(htmlTable(n)); break;
       case "img": {
         const wide = n.file === "architecture.png";
+        if (print) {                                       // keep a figure and its caption on one page
+          const cap = nodes[i + 1] && nodes[i + 1].t === "caption" ? nodes[++i] : null;
+          out.push(`<figure><img src="${dataUri(n.file)}" alt="${esc(n.alt)}" style="width:${n.w}px">${cap
+            ? `<figcaption class="caption figure" id="${capId(cap)}">${mk(capId(cap))}<b>${cap.kind} ${cap.n}:</b> ${esc(cap.text)}</figcaption>` : ""}</figure>`);
+          break;
+        }
         const maxW = wide ? 1400 : Math.round(n.w * 1.5);
         out.push(`<div class="fig${wide ? " wide" : ""}"><img src="${dataUri(n.file)}" alt="${esc(n.alt)}" style="max-width:min(100%,${maxW}px)" loading="lazy" title="Click to enlarge"></div>`);
         break;
       }
-      case "toc": out.push(`<nav class="toc"><ol>${headings.map((h) =>
-        `<li class="${h.t}"><a href="#${slug(h.text)}">${esc(h.text)}</a></li>`).join("")}</ol></nav>`); break;
-      case "pagebreak": case "spacer": break;
+      case "toc": out.push(entryList("contents", ctx.headings.map((h) => ({ id: slug(h.text), cls: h.t, label: esc(h.text) })))); break;
+      case "lof": case "lot": out.push(entryList("captions", (n.t === "lof" ? ctx.figures : ctx.tables).map((c) =>
+        ({ id: capId(c), cls: "cap", label: `${c.kind} ${c.n}: ${esc(c.text)}` })))); break;
+      case "pagebreak": if (print) out.push('<div class="pb"></div>'); break;
+      case "spacer": break;
       default: throw new Error(`unknown node ${n.t}`);
     }
   }
@@ -774,16 +847,21 @@ const spy = () => {
 };
 document.addEventListener("scroll", spy, { passive: true }); spy();`;
 
+const allNodes = [...front, ...partA, ...partB, ...partC];
+const ctx = {
+  headings: allNodes.filter((n) => n.t === "h1" || n.t === "h2"),
+  figures: allNodes.filter((n) => n.t === "caption" && n.kind === "Figure"),
+  tables: allNodes.filter((n) => n.t === "caption" && n.kind === "Table"),
+};
+
 function buildHtml({ artifact = false } = {}) {
-  const all = [...partA, ...partB, ...partC];
-  const headings = all.filter((n) => (n.t === "h1" || n.t === "h2") && n.text !== "Table of Contents");
-  const side = headings.map((h) => `<a class="${h.t}" href="#${slug(h.text)}">${esc(h.text)}</a>`).join("\n");
+  const side = ctx.headings.map((h) => `<a class="${h.t}" href="#${slug(h.text)}">${esc(h.text)}</a>`).join("\n");
   const body = `<div class="layout">
 <aside class="side"><div class="h">Contents</div>
 ${side}
 </aside>
 <main>
-${toHtml(all, headings)}
+${toHtml(allNodes, ctx)}
 </main>
 </div>
 <div id="lb" role="dialog" aria-label="Enlarged figure"><img alt=""></div>
@@ -805,11 +883,200 @@ ${body}
 `;
 }
 
-// ═════════════════════════════ write both ═════════════════════════════
-fs.writeFileSync(`${BASE}.html`, buildHtml());
-if (process.env.ARTIFACT_HTML) fs.writeFileSync(process.env.ARTIFACT_HTML, buildHtml({ artifact: true }));  // for publishing
-console.log(`wrote ${BASE}.html (${(fs.statSync(`${BASE}.html`).size / 1024).toFixed(0)} KB)`);
-Packer.toBuffer(doc).then((buf) => {
+// ═════════════════════════════ PDF (print HTML → headless Chrome) ═════════════════════════════
+const PRINT_TEXT_PT = (8.27 - 2.5) * 72;                   // A4 width minus the 1.5" + 1" margins
+const PRINT_CSS = `
+@page { size: A4; margin: 1in 1in 1in 1.5in; }
+@page wide { size: A4 landscape; margin: 0.9in 1in; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { margin: 0; color: #000; background: #fff; font: 12pt/1.5 "Times New Roman", "Liberation Serif", Tinos, serif;
+       font-kerning: normal; text-rendering: optimizeLegibility; }
+.pb { break-after: page; }
+.mk { position: absolute; font-size: 3pt; color: #fff; white-space: nowrap; }
+.landscape { page: wide; }
+h1, h2, h3 { font-weight: 700; line-height: 1.3; break-after: avoid; }
+h1 { font-size: 16pt; margin: 0 0 16pt; }
+h1.chapter { break-before: page; }
+h1.fm { text-align: center; margin-bottom: 20pt; }
+h2 { font-size: 14pt; margin: 16pt 0 6pt; }
+h3 { font-size: 12pt; margin: 12pt 0 4pt; }
+p { margin: 0 0 8pt; text-align: justify; hyphens: auto; orphans: 2; widows: 2; }
+p.c { text-align: center; }
+ul, ol { margin: 0 0 8pt; padding-left: 1.6em; }
+li { margin: 0 0 3pt; text-align: justify; }
+li.l1 { margin-left: 1.6em; list-style: "– "; }
+ol.refs { list-style: none; counter-reset: ref; padding-left: 2.4em; }
+ol.refs li { counter-increment: ref; position: relative; text-align: left; overflow-wrap: anywhere; }
+ol.refs li::before { content: "[" counter(ref) "]"; position: absolute; left: -2.4em; }
+code { font-family: "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace; font-size: 10pt; }
+pre { background: #f2f2f2; border: 0.75pt solid #d0d0d0; padding: 6pt 8pt; margin: 4pt 0 10pt; font-size: 9pt;
+      line-height: 1.35; white-space: pre-wrap; break-inside: avoid; }
+pre code { font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+mark { background: #fff176; }
+.tbl { margin: 0 0 12pt; }
+table { width: 100%; border-collapse: collapse; font-size: 10.5pt; line-height: 1.3; }
+th, td { border: 0.75pt solid #808080; padding: 3pt 5pt; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+th { background: #DCE6F1; vertical-align: middle; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.caption { text-align: center; font-size: 11pt; margin: 4pt 0 10pt; }
+.caption i { font-style: normal; }
+.caption.table { margin: 12pt 0 4pt; break-after: avoid; }
+figure { margin: 10pt 0 12pt; text-align: center; break-inside: avoid; }
+figure img { max-width: 100%; height: auto; border: 0.5pt solid #bfbfbf; }
+figcaption { margin-top: 6pt; }
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0 0 3pt; text-align: left; }
+.toc a { display: flex; align-items: baseline; }
+.toc .dots { flex: 1 1 auto; min-width: 14pt; margin: 0 4pt; border-bottom: 1.2pt dotted #000; transform: translateY(-3pt); }
+.toc .pg { flex: none; min-width: 1.8em; text-align: right; }
+.toc.contents li.h1 { font-weight: 700; margin-top: 7pt; }
+.toc.contents li.h2 { padding-left: 1.6em; }
+.toc.captions li { margin-bottom: 6pt; }
+.cover { height: 9.5in; display: flex; flex-direction: column; text-align: center; }
+.cover .inst { font-size: 15pt; line-height: 1.5; }
+.cover .uni, .cover .campus { font-weight: 700; }
+.cover .pre { margin-top: 1.1in; font-size: 13pt; font-style: italic; }
+.cover h1.title { font-size: 20pt; line-height: 1.35; margin: 12pt 0 14pt; text-wrap: balance; }
+.cover h1.title br { display: none; }
+.cover .tools { font-style: italic; }
+.cover .course { margin-top: 0.7in; font-size: 13pt; }
+.cover .who { margin-top: 0.5in; }
+.cover .label { font-weight: 700; margin-bottom: 4pt; }
+.cover .date { margin-top: auto; font-size: 13pt; }`;
+
+function buildPrintHtml(print) {
+  const part = (nodes) => toHtml(nodes, ctx, print);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Real-Time and Historical Analytics of NEPSE using a Big Data Stack</title>
+<style>${PRINT_CSS}</style>
+</head>
+<body>
+${part(front)}
+${part(partA)}
+<section class="landscape">
+${part(partB)}
+</section>
+${part(partC)}
+</body>
+</html>
+`;
+}
+
+const roman = (n) => [[10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]]
+  .reduce((acc, [v, r]) => { while (n >= v) { acc += r; n -= v; } return acc; }, "");
+const which = (cmd) => { try { return execFileSync("sh", ["-c", `command -v ${cmd}`]).toString().trim(); } catch { return null; } };
+
+function chromePdf(html, pdfFile, tmp) {
+  const chrome = process.env.CHROME || ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"].map(which).find(Boolean);
+  if (!chrome) throw new Error("Google Chrome or Chromium not found (set CHROME=/path/to/chrome)");
+  const htmlFile = path.join(tmp, "print.html");
+  fs.writeFileSync(htmlFile, html);
+  execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    `--user-data-dir=${path.join(tmp, "profile")}`, "--no-pdf-header-footer", "--generate-pdf-document-outline",
+    `--print-to-pdf=${pdfFile}`, `file://${htmlFile}`], { stdio: "pipe" });
+}
+const pdfText = (pdfFile) => execFileSync("pdftotext", ["-enc", "UTF-8", pdfFile, "-"]).toString().split("\f").slice(0, -1);
+
+// Returns the page label ("iv", "12") of every heading and caption, or null when the PDF cannot be built.
+async function buildPdf() {
+  if (!which("pdftotext")) throw new Error("pdftotext not found (install poppler-utils)");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nepse-report-"));
+  try {
+    // pass 1: find the physical page of every marker
+    const pass1 = path.join(tmp, "pass1.pdf");
+    chromePdf(buildPrintHtml({ pages: null, markers: true }), pass1, tmp);
+    const phys = {};
+    pdfText(pass1).forEach((text, i) => {
+      for (const m of text.matchAll(/QQ([a-z0-9-]+)QQ/g)) if (!(m[1] in phys)) phys[m[1]] = i + 1;
+    });
+    const bodyStart = phys[slug(partA[0].text)];
+    const label = (p) => (p < bodyStart ? roman(p) : String(p - bodyStart + 1));
+    const pages = Object.fromEntries(Object.entries(phys).map(([id, p]) => [id, label(p)]));
+    const missing = [...ctx.headings.map((h) => slug(h.text)), ...[...ctx.figures, ...ctx.tables].map(capId)].filter((id) => !pages[id]);
+    if (missing.length) throw new Error(`page not found for ${missing.join(", ")}`);
+
+    // pass 2: the same layout without markers, with the page numbers filled in
+    const pass2 = path.join(tmp, "pass2.pdf");
+    chromePdf(buildPrintHtml({ pages, markers: false }), pass2, tmp);
+    const text = pdfText(pass2);
+    const norm = (t) => t.replace(/\s+/g, "");
+    for (const h of ctx.headings) {
+      if (!norm(text[phys[slug(h.text)] - 1] || "").includes(norm(h.text))) console.warn(`warning: "${h.text}" moved off page ${pages[slug(h.text)]}`);
+    }
+
+    // page numbers in the footer (none on the cover), document properties
+    const { PDFDocument, StandardFonts } = require("pdf-lib");
+    const pdf = await PDFDocument.load(fs.readFileSync(pass2));
+    const font = await pdf.embedFont(StandardFonts.TimesRoman);
+    pdf.getPages().forEach((page, i) => {
+      if (i === 0) return;
+      const s = label(i + 1), size = 11;
+      page.drawText(s, { x: (page.getWidth() - font.widthOfTextAtSize(s, size)) / 2, y: 36, size, font });
+    });
+    pdf.setTitle("Real-Time and Historical Analytics of the Nepal Stock Exchange (NEPSE) using a Big Data Stack", { showInWindowTitleBar: true });
+    pdf.setAuthor("Santosh Tiwari (082MSDSA024), Arbind Sah (082MSDSA006)");
+    pdf.setSubject("Big Data Technology project report, Institute of Engineering, Pulchowk Campus");
+    pdf.setKeywords(["big data", "Apache Kafka", "Apache Spark", "HDFS", "NEPSE", "Lambda architecture"]);
+    pdf.setCreator("report/build.js");
+    const out = await pdf.save();
+    fs.writeFileSync(`${BASE}.pdf`, out);
+    console.log(`wrote ${BASE}.pdf (${(out.length / 1024).toFixed(0)} KB, ${pdf.getPageCount()} pages)`);
+    return pages;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ═════════════════════════════ Word: cached contents entries ═════════════════════════════
+// The docx library writes the three lists as empty Word fields. Fill each with its entries and page numbers
+// so the lists show in every viewer (LibreOffice, Google Docs, WPS); Word recomputes them when it opens the file.
+const xmlEsc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+async function fillDocxLists(buf, pages) {
+  const JSZip = require("jszip");
+  const zip = await JSZip.loadAsync(buf);
+  let xml = await zip.file("word/document.xml").async("string");
+  const lists = {
+    "Table of Contents": ctx.headings.map((h) => ({ text: h.text, id: slug(h.text), level: h.t === "h1" ? 1 : 2 })),
+    "List of Figures": ctx.figures.map((c) => ({ text: `${c.kind} ${c.n}: ${c.text}`, id: capId(c), level: 0 })),
+    "List of Tables": ctx.tables.map((c) => ({ text: `${c.kind} ${c.n}: ${c.text}`, id: capId(c), level: 0 })),
+  };
+  for (const [alias, entries] of Object.entries(lists)) {
+    const re = new RegExp(`(<w:sdt><w:sdtPr><w:alias w:val="${alias}"/></w:sdtPr><w:sdtContent>)([\\s\\S]*?)(</w:sdtContent></w:sdt>)`);
+    const m = xml.match(re);
+    if (!m) throw new Error(`Word field "${alias}" not found`);
+    const begin = m[2].match(/<w:r><w:fldChar w:fldCharType="begin"[\s\S]*?w:fldCharType="separate"\/><\/w:r>/)[0];
+    const paras = entries.map((e, i) => {
+      const indent = e.level === 2 ? 440 : 0;
+      const spacing = e.level === 1 ? 'w:before="120" w:after="40"' : e.level === 2 ? 'w:after="40"' : 'w:after="100"';
+      const rPr = e.level === 1 ? "<w:rPr><w:b/><w:bCs/></w:rPr>" : "";
+      return `<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${TEXT_W}"/></w:tabs>`
+        + `<w:spacing ${spacing} w:line="276" w:lineRule="auto"/><w:ind w:left="${indent}" w:right="560"/></w:pPr>`
+        + (i === 0 ? begin : "")
+        + `<w:r>${rPr}<w:t xml:space="preserve">${xmlEsc(e.text)}</w:t></w:r><w:r>${rPr}<w:tab/></w:r>`
+        + `<w:r>${rPr}<w:t>${xmlEsc((pages && pages[e.id]) || "")}</w:t></w:r>`
+        + (i === entries.length - 1 ? '<w:r><w:fldChar w:fldCharType="end"/></w:r>' : "")
+        + "</w:p>";
+    });
+    xml = xml.replace(re, (_, a, __, c) => a + paras.join("") + c);
+  }
+  zip.file("word/document.xml", xml);
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
+// ═════════════════════════════ write all three ═════════════════════════════
+(async () => {
+  fs.writeFileSync(`${BASE}.html`, buildHtml());
+  if (process.env.ARTIFACT_HTML) fs.writeFileSync(process.env.ARTIFACT_HTML, buildHtml({ artifact: true }));  // for publishing
+  console.log(`wrote ${BASE}.html (${(fs.statSync(`${BASE}.html`).size / 1024).toFixed(0)} KB)`);
+  let pages = null;
+  try { pages = await buildPdf(); } catch (e) { console.warn(`PDF skipped: ${e.message}`); }
+  const buf = await fillDocxLists(await Packer.toBuffer(doc), pages);
   fs.writeFileSync(`${BASE}.docx`, buf);
   console.log(`wrote ${BASE}.docx (${(buf.length / 1024).toFixed(0)} KB)`);
-});
+})().catch((e) => { console.error(e); process.exit(1); });

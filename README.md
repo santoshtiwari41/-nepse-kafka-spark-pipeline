@@ -186,7 +186,8 @@ The **Spark MLlib** random forest predicts whether a stock closes higher the nex
 
 The full report covers the problem, data sources, features, storage design, choice of components, block diagram, implementation, results and limitations:
 
-- [`report/NEPSE_BigData_Project_Report.docx`](report/NEPSE_BigData_Project_Report.docx): Word, 27 pages
+- [`report/NEPSE_BigData_Project_Report.pdf`](report/NEPSE_BigData_Project_Report.pdf): print-ready PDF, A4, 38 pages
+- [`report/NEPSE_BigData_Project_Report.docx`](report/NEPSE_BigData_Project_Report.docx): the same report in Word
 - [`report/NEPSE_BigData_Project_Report.html`](report/NEPSE_BigData_Project_Report.html): the same report as a single web page (download it and open it in a browser)
 - [`plan.md`](plan.md): the original design document
 
