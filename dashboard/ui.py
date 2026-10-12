@@ -121,10 +121,12 @@ html, body, [class*="css"] { font-feature-settings:"tnum" 1; }
 /* page navigation (st.page_link row) */
 .st-key-navbar { background:var(--navy2); margin:6px -1rem 14px; padding:0 8px; }
 .st-key-navbar [data-testid="stHorizontalBlock"] { gap:0; }
-.st-key-navbar a { color:#b8c7de !important; padding:11px 20px; border-radius:0; font-weight:600; font-size:.88rem;
-                   border-bottom:3px solid transparent; justify-content:center; }
-.st-key-navbar a:hover { background:#1c3f73; color:#fff !important; }
-.st-key-navbar a p { font-weight:600; font-size:.88rem; }
+.st-key-navbar a { padding:12px 20px; border-radius:0; border-bottom:3px solid transparent;
+                   justify-content:center; text-decoration:none; opacity:1 !important; }
+.st-key-navbar a, .st-key-navbar a * { color:#cdd9ea !important; opacity:1 !important; -webkit-font-smoothing:antialiased; }
+.st-key-navbar a p { font-weight:600 !important; font-size:.92rem !important; letter-spacing:.02em; }
+.st-key-navbar a:hover { background:#1c3f73; }
+.st-key-navbar a:hover, .st-key-navbar a:hover * { color:#ffffff !important; }
 
 :root { --navy:#0b2545; --navy2:#13315c; --gold:#c9a227; }
 .block-container { padding-top:0 !important; }

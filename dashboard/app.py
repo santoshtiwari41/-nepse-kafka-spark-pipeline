@@ -26,7 +26,8 @@ with st.container(key="navbar"):
 # underline the active page
 active = PAGES.index(current)
 st.markdown(f"<style>.st-key-navbar [data-testid='stColumn']:nth-child({active + 1}) a"
-            "{color:#fff !important;border-bottom-color:#c9a227}</style>", unsafe_allow_html=True)
+            "{border-bottom-color:#c9a227}.st-key-navbar [data-testid='stColumn']:nth-child("
+            f"{active + 1}) a *{{color:#ffffff !important}}</style>", unsafe_allow_html=True)
 
 current.run()
 
