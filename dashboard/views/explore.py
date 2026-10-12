@@ -43,7 +43,7 @@ else:
         f"<div class='ends'><span>Rs {lo:,.0f}</span><span>{pos:.0f}% of range</span><span>Rs {hi:,.0f}</span></div></div></div>",
         unsafe_allow_html=True)
     st.write("")
-    m = st.columns(5)
+    m = st.columns(4)
     m[0].metric("1-year return", f"{s['ret_1y']:+.2f}%" if pd.notna(s["ret_1y"]) else "—",
                 help="Bonus-adjusted price change over the last 12 months")
     m[1].metric("RSI (14)", f"{s['rsi_14']:.1f}" if pd.notna(s["rsi_14"]) else "—",
@@ -52,21 +52,38 @@ else:
     m[2].metric("Trend", str(s["trend"]).title(), help="From SMA 20/50/200 alignment")
     m[3].metric("Volatility (20d, annualised)", f"{s['volatility_20']:.1f}%" if pd.notna(s["volatility_20"]) else "—",
                 help="How much the price swings; higher = riskier")
-    _, _, preds = data.ml_results()
+    metrics, _, preds = data.ml_results()
     pred = preds[preds["symbol"] == symbol] if not preds.empty else preds
-    if not pred.empty:
-        p = pred.iloc[0]
-        m[4].metric("Next-day outlook (ML)", f"{p['p_up'] * 100:.0f}% up", delta=str(p["signal"]).title(),
-                    delta_color="off",
-                    help="Spark MLlib random forest: estimated probability that the stock closes higher on the "
-                         "next trading day. Experimental, see the Pipeline page for its accuracy. "
-                         "Not investment advice.")
-    else:
-        m[4].metric("Next-day outlook (ML)", "Not available",
-                    help="The model needs about 200 trading days of history for its long-term indicators, "
-                         "so recently listed stocks get no prediction.")
-    st.caption("Next-day outlook comes from a machine-learning model and is experimental: daily price moves are "
-               "mostly random. Not investment advice.")
+    with st.container(key="card_ml_stock"):
+        section("Machine-learning outlook", "Random forest model (Spark MLlib) · next trading day")
+        c1, c2 = st.columns([3, 2], vertical_alignment="center")
+        if not pred.empty:
+            p = pred.iloc[0]
+            prob = float(p["p_up"]) * 100
+            tone = {"LIKELY UP": UP, "LIKELY DOWN": DOWN}.get(p["signal"], INK2)
+            c1.markdown(
+                f"<div style='display:flex;align-items:baseline;gap:14px;flex-wrap:wrap'>"
+                f"<span style='font-size:2rem;font-weight:700;color:#111827'>{prob:.0f}%</span>"
+                f"<span style='color:#4b5563'>chance of closing higher tomorrow</span>"
+                f"<span style='font-weight:700;letter-spacing:.06em;font-size:.78rem;color:{tone}'>"
+                f"{html.escape(str(p['signal']))}</span></div>"
+                f"<div style='position:relative;height:8px;background:linear-gradient(90deg,#f3d4d1,#e5e8ec 50%,#cfe8d8);"
+                f"margin:14px 0 6px'><i style='position:absolute;left:calc({prob:.0f}% - 2px);top:-5px;width:4px;"
+                f"height:18px;background:#111827'></i></div>"
+                f"<div style='display:flex;justify-content:space-between;font-size:.74rem;color:#9ca3af'>"
+                f"<span>0% likely down</span><span>50%</span><span>100% likely up</span></div>",
+                unsafe_allow_html=True)
+        else:
+            c1.markdown("**No prediction for this stock.** The model needs about 200 trading days of history "
+                        "for its long-term indicators, so recently listed stocks are skipped.")
+        if metrics:
+            c2.markdown(
+                f"<div style='font-size:.8rem;color:#4b5563;line-height:1.7'>"
+                f"<b>Model accuracy on unseen data (2025 onward)</b><br>"
+                f"Accuracy {float(metrics['accuracy']) * 100:.1f}% · baseline {float(metrics['baseline_accuracy']) * 100:.1f}% · "
+                f"AUC {metrics['auc']}<br>"
+                f"<span style='color:#9ca3af'>Experimental: daily price moves are mostly random. "
+                f"Not investment advice.</span></div>", unsafe_allow_html=True)
 
     with st.container(key="card_stock"):
         section(f"{symbol} price & indicators", "Candles with SMA 20/50/200 and Bollinger band · volume · RSI")
